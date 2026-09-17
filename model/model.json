@@ -1,0 +1,42 @@
+{
+  "note": "The classifier is split because the file-transfer step caps at 20MB. app.js fetches the parts and concatenates them before handing the buffer to the tflite runtime.",
+  "model": "INatVision_Small_2_fact256_8bit.tflite",
+  "totalBytes": 22197168,
+  "sha256": "eae277b24efa629b998d5f9c091da0576162cb1aad498786087acd001dc86d2c",
+  "input": {
+    "shape": [
+      1,
+      299,
+      299,
+      3
+    ],
+    "dtype": "float32",
+    "preprocess": "resize 299x299, x/127.5 - 1"
+  },
+  "output": {
+    "shape": [
+      1,
+      507
+    ],
+    "dtype": "float32",
+    "index": "leaf_class_id in taxonomy.csv"
+  },
+  "parts": [
+    {
+      "file": "inat-vision.part0",
+      "bytes": 7000000
+    },
+    {
+      "file": "inat-vision.part1",
+      "bytes": 7000000
+    },
+    {
+      "file": "inat-vision.part2",
+      "bytes": 7000000
+    },
+    {
+      "file": "inat-vision.part3",
+      "bytes": 1197168
+    }
+  ]
+}
