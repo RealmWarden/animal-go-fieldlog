@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Animal Go Field Log</title>
+<meta name="description" content="Record real animals, roll individuals, fill the dex.">
+
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#EFF2ED" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0E1412" media="(prefers-color-scheme: dark)">
+
+<!-- iOS home-screen install -->
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Field Log">
+<link rel="apple-touch-icon" href="icons/icon-180.png">
+<link rel="icon" href="icons/icon-192.png">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=Spectral:ital,wght@0,400;0,600;1,400;1,600&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<div id="boot" class="bootscreen">Loading species data…</div>
+
+<div id="app" hidden>
+<div class="wrap">
+  <header class="topbar">
+    <div class="brandrow">
+      <div class="brand">Animal&nbsp;Go <em>field log</em></div>
+      <div class="walked" id="walked">0.0 km</div>
+    </div>
+    <div class="meter">
+      <div class="meter-head"><span>National dex</span><span id="dexcount">0 / 296</span></div>
+      <div class="meter-bar"><div class="meter-fill" id="dexfill"></div></div>
+      <div class="meter-head" style="margin-top:4px"><span id="pending"></span><span id="obsn"></span></div>
+    </div>
+  </header>
+
+  <nav class="tabs" role="tablist">
+    <button class="tab" role="tab" id="tab-record" aria-selected="true" aria-controls="p-record">Record</button>
+    <button class="tab" role="tab" id="tab-coll" aria-selected="false" aria-controls="p-coll">Collection</button>
+    <button class="tab" role="tab" id="tab-dex" aria-selected="false" aria-controls="p-dex">Dex</button>
+  </nav>
+
+  <!-- RECORD -->
+  <section class="panel" id="p-record" role="tabpanel" aria-labelledby="tab-record">
+    <label class="fld">
+      <span class="lbl">Species identified</span>
+      <select id="species"></select>
+    </label>
+    <div class="fld">
+      <span class="lbl">View quality</span>
+      <div class="seg" role="group" id="viewseg">
+        <button type="button" data-q="glimpse" aria-pressed="false">Glimpse</button>
+        <button type="button" data-q="partial" aria-pressed="true">Partial</button>
+        <button type="button" data-q="clear" aria-pressed="false">Clear</button>
+      </div>
+    </div>
+    <div class="fld">
+      <span class="lbl">Ownership status at time of scan</span>
+      <div class="seg" role="group">
+        <button type="button" data-v="wild" aria-pressed="true">Wild</button>
+        <button type="button" data-v="captive" aria-pressed="false">Captive / pet</button>
+      </div>
+    </div>
+    <label class="fld">
+      <span class="lbl">Locality</span>
+      <div class="row">
+        <input type="text" id="place" placeholder="e.g. Griffith Park, CA" value="Griffith Park, CA">
+        <button class="btn tiny ghost" id="geo" type="button" style="border:1px solid var(--line-2)">GPS</button>
+      </div>
+    </label>
+    <button class="btn" id="record">Scan &amp; record</button>
+    <div id="result"></div>
+  </section>
+
+  <!-- COLLECTION -->
+  <section class="panel" id="p-coll" role="tabpanel" aria-labelledby="tab-coll" hidden>
+    <div class="filters">
+      <input class="full" type="search" id="q" placeholder="Search name, place, tag…">
+      <select id="f-status">
+        <option value="">All statuses</option>
+        <option value="wild">Wild only</option>
+        <option value="captive">Captive only</option>
+        <option value="unresolved">Awaiting identification</option>
+      </select>
+      <select id="f-sort">
+        <option value="recent">Newest first</option>
+        <option value="mass">Heaviest first</option>
+        <option value="pct">Best percentile</option>
+        <option value="xp">Most experienced</option>
+        <option value="near">Closest to next tier</option>
+        <option value="species">By species</option>
+      </select>
+      <select id="f-clade" class="full"><option value="">All groups</option></select>
+    </div>
+    <div class="walkbox">
+      <h3>Active squad · <span id="squadn">0</span>/6</h3>
+      <p class="note" style="margin-top:0">Star a specimen below to add it. Only the active squad
+      earns experience from distance — the rest of the collection needs nothing from you.
+      Nothing forces rotation; bringing a creature up is its own completion axis, so swap
+      the squad when you want a particular animal levelled.</p>
+      <div class="row" style="margin-top:10px">
+        <button class="btn tiny" data-walk="1">Walk 1 km</button>
+        <button class="btn tiny" data-walk="5">5 km</button>
+        <button class="btn tiny ghost" style="border:1px solid var(--accent)" data-walk="0.5">0.5 km</button>
+      </div>
+    </div>
+    <div id="list"></div>
+  </section>
+
+  <!-- DEX -->
+  <section class="panel" id="p-dex" role="tabpanel" aria-labelledby="tab-dex" hidden>
+    <p class="note" style="margin:0 0 12px">Only wild records advance the dex. Captive and companion
+    animals are collected and kept, but greyed out here.</p>
+    <div class="dexgrid" id="dexgrid"></div>
+  </section>
+
+  <p class="note" style="margin-top:14px">
+    Prototype of the collection loop only. The 296 species are the real roster of
+    iNaturalist's published on-device classifier; the picker plus view quality stands in for
+    the camera scan and its confidence. Stats are derived from allometric scaling, not
+    measured, and 59% of body masses are family-typical estimates rather than species figures.
+  </p>
+  <div class="row" style="flex-wrap:wrap; gap:6px; margin-top:10px">
+    <button class="btn tiny ghost" id="export" style="border:1px solid var(--line-2)">Export records</button>
+    <label class="btn tiny ghost" style="border:1px solid var(--line-2); cursor:pointer">
+      Import<input type="file" id="importfile" accept="application/json" hidden>
+    </label>
+    <button class="btn tiny ghost" id="reset" style="border:1px solid var(--line-2)">Clear all</button>
+  </div>
+  <p class="note" style="margin-top:8px">iOS can clear a web app's storage after weeks
+  of disuse. Export now and then — it's the only real backup.</p>
+</div>
+</div>
+
+<div id="toast" class="toast" hidden role="status" aria-live="polite"></div>
+
+<script src="app.js"></script>
+</body>
+</html>
