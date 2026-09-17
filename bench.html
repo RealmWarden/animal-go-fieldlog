@@ -1,0 +1,216 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Field Log — Device Benchmark</title>
+<link rel="stylesheet" href="styles.css">
+<style>
+  .wrap{padding-block:20px 60px}
+  h1{font-family:var(--fs-sci); font-size:24px; margin:0 0 4px; line-height:1.15}
+  .sub{color:var(--ink-3); font-size:13px; margin:0 0 18px}
+  .steps{border:1px solid var(--line); background:var(--surface); margin-bottom:16px}
+  .step{display:flex; gap:10px; align-items:baseline; padding:10px 12px; border-bottom:1px solid var(--line);
+        font-size:13.5px}
+  .step:last-child{border-bottom:none}
+  .step .mark{font-family:var(--fs-num); width:18px; flex:0 0 auto; color:var(--ink-3)}
+  .step .lbl{flex:1}
+  .step .val{font-family:var(--fs-num); font-variant-numeric:tabular-nums; color:var(--ink-2)}
+  .step[data-s="run"] .mark{color:var(--accent)}
+  .step[data-s="ok"] .mark{color:var(--accent)}
+  .step[data-s="bad"] .mark, .step[data-s="bad"] .val{color:var(--wild)}
+  .verdict{border:1px solid var(--line-2); border-left:3px solid var(--accent);
+    background:var(--surface); padding:14px; margin-bottom:16px}
+  .verdict h2{font-family:var(--fs-sci); font-size:19px; margin:0 0 6px}
+  .verdict p{margin:0; font-size:14px; color:var(--ink-2); line-height:1.5}
+  .big{font-family:var(--fs-num); font-size:34px; font-weight:600; color:var(--ink);
+       font-variant-numeric:tabular-nums; line-height:1.1}
+  pre{background:var(--surface-2); border:1px solid var(--line); padding:12px; font-size:11px;
+      font-family:var(--fs-num); overflow-x:auto; white-space:pre-wrap; word-break:break-word; margin:0}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Device benchmark</h1>
+  <p class="sub">Measures whether this phone can run the species classifier, and how fast.
+  Nothing is saved or sent anywhere — read the result back to Claude.</p>
+
+  <button class="btn" id="go">Run benchmark</button>
+
+  <div class="steps" id="steps" hidden></div>
+  <div class="verdict" id="verdict" hidden></div>
+
+  <p class="lbl" id="rawlbl" hidden>Copy this back</p>
+  <pre id="raw" hidden></pre>
+  <button class="btn ghost" id="copy" hidden style="border:1px solid var(--line-2); margin-top:10px">Copy to clipboard</button>
+</div>
+
+<script>
+const STEPS = [
+  ["env",      "Device and browser"],
+  ["camera",   "Rear camera access"],
+  ["runtime",  "Load LiteRT runtime"],
+  ["download", "Download model (22 MB, 4 parts)"],
+  ["verify",   "Reassemble and checksum"],
+  ["compile",  "Compile model"],
+  ["warm",     "First inference"],
+  ["bench",    "8 more inferences"],
+];
+const el = {};
+function paintSteps(){
+  const c = document.getElementById("steps"); c.hidden = false; c.innerHTML = "";
+  for (const [k, label] of STEPS){
+    const d = document.createElement("div");
+    d.className = "step"; d.dataset.s = "wait";
+    d.innerHTML = `<span class="mark">·</span><span class="lbl">${label}</span><span class="val"></span>`;
+    c.appendChild(d); el[k] = d;
+  }
+}
+const mark = (k,s,v="") => { el[k].dataset.s = s;
+  el[k].querySelector(".mark").textContent = s==="ok"?"✓":s==="bad"?"✕":"→";
+  el[k].querySelector(".val").textContent = v; };
+
+const R = {};                       // everything we learn
+
+async function run(){
+  document.getElementById("go").disabled = true;
+  paintSteps();
+
+  // --- environment -------------------------------------------------------
+  mark("env","run");
+  R.ua = navigator.userAgent;
+  R.cores = navigator.hardwareConcurrency || null;
+  R.mem = navigator.deviceMemory || null;
+  R.standalone = window.matchMedia("(display-mode: standalone)").matches || !!navigator.standalone;
+  try { R.webgpu = !!(navigator.gpu && await navigator.gpu.requestAdapter()); } catch(e){ R.webgpu = false; }
+  const isiOS = /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+                (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+  R.ios = isiOS;
+  mark("env","ok", `${R.cores||"?"} cores · webgpu ${R.webgpu?"yes":"no"}`);
+
+  // --- camera ------------------------------------------------------------
+  mark("camera","run");
+  try{
+    const s = await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:"environment"}}});
+    const t = s.getVideoTracks()[0]; const st = t.getSettings();
+    R.camera = `${st.width}x${st.height}`;
+    R.cameraFacing = st.facingMode || "unknown";
+    t.stop(); s.getTracks().forEach(x=>x.stop());
+    mark("camera","ok", `${R.camera} ${R.cameraFacing}`);
+  }catch(e){
+    R.camera = "DENIED/UNAVAILABLE: " + (e.name||e.message);
+    mark("camera","bad", (e.name||"failed"));
+  }
+
+  // --- runtime -----------------------------------------------------------
+  mark("runtime","run");
+  let L;
+  try{
+    let t0 = performance.now();
+    L = await import("https://cdn.jsdelivr.net/npm/@litertjs/core@2.5.3/+esm");
+    await L.loadLiteRt("https://cdn.jsdelivr.net/npm/@litertjs/core@2.5.3/wasm/");
+    R.runtimeMs = Math.round(performance.now()-t0);
+    mark("runtime","ok", R.runtimeMs+" ms");
+  }catch(e){ R.runtimeErr = String(e.message||e).slice(0,140); mark("runtime","bad","failed"); return finish(); }
+
+  // --- download ----------------------------------------------------------
+  mark("download","run");
+  let joined, manifest;
+  try{
+    let t0 = performance.now();
+    manifest = await fetch("model/model.json").then(r=>r.json());
+    const bufs = [];
+    for (const p of manifest.parts){
+      bufs.push(new Uint8Array(await fetch("model/"+p.file).then(r=>r.arrayBuffer())));
+      mark("download","run", `${bufs.length}/${manifest.parts.length}`);
+    }
+    R.downloadMs = Math.round(performance.now()-t0);
+    const total = bufs.reduce((a,b)=>a+b.length,0);
+    joined = new Uint8Array(total);
+    let o=0; for(const b of bufs){ joined.set(b,o); o+=b.length; }
+    R.bytes = total;
+    mark("download","ok", `${R.downloadMs} ms · ${(total/1048576).toFixed(1)} MB`);
+  }catch(e){ R.downloadErr = String(e.message||e).slice(0,140); mark("download","bad","failed"); return finish(); }
+
+  // --- verify ------------------------------------------------------------
+  mark("verify","run");
+  try{
+    const h = [...new Uint8Array(await crypto.subtle.digest("SHA-256", joined))]
+      .map(x=>x.toString(16).padStart(2,"0")).join("");
+    R.shaOk = h === manifest.sha256;
+    mark(R.shaOk?"verify":"verify", R.shaOk?"ok":"bad", R.shaOk?"matches":"MISMATCH");
+  }catch(e){ R.shaOk=null; mark("verify","bad","failed"); }
+
+  // --- compile -----------------------------------------------------------
+  mark("compile","run");
+  let model;
+  try{
+    let t0 = performance.now();
+    model = await L.loadAndCompile(joined, {accelerator:"wasm"});
+    R.compileMs = Math.round(performance.now()-t0);
+    mark("compile","ok", R.compileMs+" ms");
+  }catch(e){ R.compileErr = String(e.message||e).slice(0,140); mark("compile","bad","failed"); return finish(); }
+
+  // --- inference ---------------------------------------------------------
+  const frame = new Float32Array(299*299*3);
+  for (let i=0;i<frame.length;i++) frame[i] = (i*37 % 255);    // raw 0-255, like a real frame
+  const once = async () => {
+    let r = model.run([L.Tensor.fromTypedArray(frame,[1,299,299,3])]);
+    if (r && r.then) r = await r;
+    const f = Array.isArray(r) ? r[0] : r[Object.keys(r)[0]];
+    return await f.toTypedArray();
+  };
+  mark("warm","run");
+  try{
+    let t0 = performance.now(); const v = await once();
+    R.firstMs = Math.round(performance.now()-t0);
+    R.outputLen = v.length;
+    mark("warm","ok", R.firstMs+" ms");
+  }catch(e){ R.inferErr = String(e.message||e).slice(0,140); mark("warm","bad","failed"); return finish(); }
+
+  mark("bench","run");
+  try{
+    const times=[];
+    for(let i=0;i<8;i++){ const t0=performance.now(); await once(); times.push(Math.round(performance.now()-t0));
+      mark("bench","run", `${i+1}/8`); }
+    times.sort((a,b)=>a-b);
+    R.times = times;
+    R.medianMs = times[Math.floor(times.length/2)];
+    R.minMs = times[0]; R.maxMs = times[times.length-1];
+    mark("bench","ok", `median ${R.medianMs} ms`);
+  }catch(e){ R.benchErr=String(e.message||e).slice(0,140); mark("bench","bad","failed"); }
+
+  finish();
+}
+
+function finish(){
+  const v = document.getElementById("verdict"); v.hidden = false;
+  let head, body;
+  if (R.medianMs == null){
+    head = "Couldn't complete";
+    body = "Something failed above. The raw block below tells Claude exactly which step and why.";
+  } else {
+    const s = (R.medianMs/1000).toFixed(1);
+    head = `<span class="big">${s} s</span> per identification attempt`;
+    if (R.medianMs <= 1500)      body = "Comfortable. Hold the phone at an animal and the identification can climb about once a second — the interaction works as designed.";
+    else if (R.medianMs <= 3000) body = "Workable but deliberate. Holding still works, it just narrows more slowly. Worth trimming the preview resolution.";
+    else                         body = "Too slow for live climbing. The camera flow should become tap-and-wait with a progress indicator instead.";
+    if (R.camera && R.camera.startsWith("DENIED")) body += " Camera access failed, which needs solving separately.";
+  }
+  v.innerHTML = `<h2>${head}</h2><p>${body}</p>`;
+
+  const txt = JSON.stringify(R, null, 1);
+  document.getElementById("rawlbl").hidden = false;
+  const pre = document.getElementById("raw"); pre.hidden = false; pre.textContent = txt;
+  const cp = document.getElementById("copy"); cp.hidden = false;
+  cp.onclick = async () => {
+    try { await navigator.clipboard.writeText(txt); cp.textContent = "Copied"; }
+    catch(e){ cp.textContent = "Select the text above and copy"; }
+  };
+  document.getElementById("go").disabled = false;
+  document.getElementById("go").textContent = "Run again";
+}
+document.getElementById("go").addEventListener("click", run);
+</script>
+</body>
+</html>

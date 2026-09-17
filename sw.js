@@ -3,7 +3,7 @@
    data is ~670 KB and never changes between releases, so it is cached with the
    shell rather than fetched each launch. Bump CACHE on every deploy — the old
    cache is deleted on activate. */
-const CACHE = "animalgo-v4";
+const CACHE = "animalgo-v5";
 const SHELL = [
   "./", "./index.html", "./app.js", "./styles.css", "./manifest.webmanifest",
   "./data/stat_grid.json", "./data/taxonomy.json", "./data/species.json",
@@ -46,6 +46,10 @@ self.addEventListener("fetch", e => {
   }
 
   if (new URL(req.url).origin !== location.origin) return;
+
+  // The benchmark page is a diagnostic: always take the network copy so a newer
+  // version is never masked by the offline cache.
+  if (/\/bench\.html$/.test(new URL(req.url).pathname)) return;
 
   e.respondWith(
     caches.match(req).then(hit => hit || fetch(req).then(res => {
