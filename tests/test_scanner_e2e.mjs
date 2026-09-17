@@ -55,33 +55,33 @@ const server = http.createServer((req,res)=>{
 await new Promise(r => server.listen(0, r));
 const base = `http://127.0.0.1:${server.address().port}`;
 
-/* --- the stub worker -----------------------------------------------------
-   Replays one vector per frame requested. Each entry is {sn: prob}.          */
-function stubWorker(script){
+/* --- the stub engine -----------------------------------------------------
+   Replaces engine.js, which is the 22 MB of matrix multiplication and the only
+   part of the path that cannot run in this container. Everything else is the
+   shipped code. Each SCRIPT entry is {sn: [index, prob]} and is replayed for
+   one frame, paced to loosely mimic the real 1.17 s inference so intermediate
+   states are observable rather than a blur.                                 */
+function stubEngine(script){
   return `
-const N = ${IDX.length};
-const SCRIPT = ${JSON.stringify(script)};
-let i = 0;
-self.onmessage = (e)=>{
-  const m = e.data;
-  if (m.t === "init"){
-    self.postMessage({t:"stage", s:"runtime", note:"stub"});
-    self.postMessage({t:"ready"});
-    return;
-  }
-  if (m.t === "frame"){
-    const spec = SCRIPT[Math.min(i, SCRIPT.length-1)]; i++;
-    const p = new Float32Array(N);
-    let used = 0;
-    for (const k in spec){ p[spec[k][0]] = spec[k][1]; used += spec[k][1]; }
-    // spread the remainder so the vector sums to 1, as a softmax output does
-    const rest = Math.max(0, 1-used)/N;
-    for (let j=0;j<N;j++) p[j] += rest;
-    // Paced to loosely mimic the real 1.17 s inference, so intermediate states
-    // (one frame in, three frames in) are observable rather than a blur.
-    setTimeout(()=>self.postMessage({t:"probs", seq:m.seq, ms:1170, probs:p}, [p.buffer]), 140);
-  }
-};`;
+window.AGE = (function(){
+  const N = ${IDX.length};
+  const SCRIPT = ${JSON.stringify(script)};
+  let i = 0, ready = false;
+  return {
+    init: async (stage)=>{ if(stage) stage("runtime","stub"); ready = true; },
+    run: async ()=>{
+      await new Promise(r=>setTimeout(r,140));
+      const spec = SCRIPT[Math.min(i, SCRIPT.length-1)]; i++;
+      const p = new Float32Array(N);
+      let used = 0;
+      for (const k in spec){ p[spec[k][0]] = spec[k][1]; used += spec[k][1]; }
+      const rest = Math.max(0, 1-used)/N;          // sum to 1, as a softmax does
+      for (let j=0;j<N;j++) p[j] += rest;
+      return {probs:p, ms:1170};
+    },
+    get ready(){ return ready; },
+  };
+})();`;
 }
 const enc = spec => Object.fromEntries(Object.entries(spec).map(([sn,p])=>[sn,[at(sn),p]]));
 
@@ -107,8 +107,8 @@ async function session(script, {photos=true}={}){
   });
   await ctx.route("https://fonts.googleapis.com/**", r=>r.fulfill({status:200, contentType:"text/css", body:""}));
   await ctx.route("https://fonts.gstatic.com/**", r=>r.abort());
-  await ctx.route("**/worker.js", route => route.fulfill({
-    status:200, contentType:"text/javascript", body: stubWorker(script),
+  await ctx.route("**/engine.js", route => route.fulfill({
+    status:200, contentType:"text/javascript", body: stubEngine(script),
   }));
   // The service worker would cache the stub and confuse later runs.
   await ctx.addInitScript(()=>{ try{ Object.defineProperty(navigator,"serviceWorker",{get:()=>undefined}); }catch(e){} });
@@ -170,6 +170,7 @@ console.log("\n1. Camera starts, the loop runs, and a confident species locks");
         "Yellow-faced Bumble Bee");
 
   // record it
+  const nBefore = await page.evaluate(()=>store.records.length);   // 5 seeded examples
   await page.click("#snap");
   await page.waitForSelector("#result .specimen", {timeout:10000});
   const rec = await page.evaluate(()=>{
@@ -182,11 +183,35 @@ console.log("\n1. Camera starts, the loop runs, and a confident species locks");
   check("it is marked as a camera record", rec.byCamera, true);
   checkT("it has a mass and a percentile", rec.mass > 0 && rec.pct >= 0 && rec.pct <= 100);
 
-  const after = await page.evaluate(()=>({frames:window.__scan.frames, locked:!!window.__scan.locked,
-                                          dis:document.getElementById("snap").disabled}));
-  check("the accumulator resets after recording", after.frames, 0);
+  const after = await page.evaluate(()=>({locked:!!window.__scan.locked,
+                                          dis:document.getElementById("snap").disabled,
+                                          n:store.records.length}));
   checkT("the button relocks so one animal is not recorded twice", after.dis && !after.locked);
+  // And it has to be earned again from scratch, not handed back by the evidence
+  // that was already on the pile.
+  await page.waitForFunction(()=>!document.getElementById("snap").disabled, null, {timeout:30000});
+  const again = await page.evaluate(()=>window.__scan.frames);
+  checkT("a second record needs a fresh three frames", again >= 3);
+  check("and exactly one record came out of that tap", after.n - nBefore, 1);
 
+  check("no page errors", errors, []);
+  await browser.close();
+}
+
+console.log("\n1b. The loop pauses on a lock, and the viewfinder restarts it");
+{
+  const {browser, page, errors} = await session([enc({"Bombus vosnesenskii":0.88})]);
+  await page.waitForFunction(()=>!document.getElementById("snap").disabled, null, {timeout:30000});
+  const paused = await page.evaluate(()=>({running:window.__scan.running,
+                                           msg:document.getElementById("scanmsg").textContent}));
+  checkT("scanning stops once it has an answer", paused.running === false);
+  checkT("and says so, with the way back", /paused/.test(paused.msg) && /tap the view/i.test(paused.msg));
+  const before = await page.evaluate(()=>window.__scan.frames);
+  await page.click("#camwrap");
+  await page.waitForFunction(()=>window.__scan.running === true, null, {timeout:10000});
+  const restarted = await page.evaluate(()=>({frames:window.__scan.frames, locked:!!window.__scan.locked}));
+  checkT("tapping the view starts over", restarted.frames === 0 && !restarted.locked);
+  checkT("and it was actually scanning before", before >= 3);
   check("no page errors", errors, []);
   await browser.close();
 }
@@ -266,6 +291,28 @@ console.log("\n4. Panning from an ambiguous genus onto one clear species");
   await browser.close();
 }
 
+console.log("\n4b. A leading candidate below the bar is shown, dimmed, not recordable");
+{
+  // Measured near-misses from scan-test.html on real photographs: the right
+  // species led at 45-53% and the old UI said "nothing recognised".
+  const {browser, page, errors} = await session([enc({"Apis mellifera":0.47,"Halictus ligatus":0.10})]);
+  await waitFrames(page, 2);
+  const ui = await page.evaluate(()=>({
+    state: document.getElementById("idcard").dataset.state,
+    sci: document.querySelector(".idsci")?.textContent.trim(),
+    meta: document.querySelector(".idmeta")?.textContent.trim(),
+    msg: document.getElementById("scanmsg").textContent,
+    dis: document.getElementById("snap").disabled,
+  }));
+  check("the card is marked provisional", ui.state, "maybe");
+  check("it names the leader", ui.sci, "Apis mellifera");
+  checkT("it says it is below the threshold", /below the threshold/.test(ui.meta));
+  checkT("it tells you to keep holding", /keep holding/i.test(ui.msg));
+  checkT("but nothing can be recorded", ui.dis);
+  check("no page errors", errors, []);
+  await browser.close();
+}
+
 console.log("\n5. The crop the classifier sees is square and undistorted");
 {
   const {browser, page, errors} = await session([enc({"Bombus vosnesenskii":0.85})]);
@@ -287,8 +334,8 @@ console.log("\n6. Camera denied: the app still works through the fallback list")
   const ctx = await browser.newContext({viewport:{width:390,height:844}, permissions:[]});
   await ctx.route("https://fonts.googleapis.com/**", r=>r.fulfill({status:200, contentType:"text/css", body:""}));
   await ctx.route("https://fonts.gstatic.com/**", r=>r.abort());
-  await ctx.route("**/worker.js", r=>r.fulfill({status:200, contentType:"text/javascript",
-                                                body: stubWorker([enc({"Bombus vosnesenskii":0.85})])}));
+  await ctx.route("**/engine.js", r=>r.fulfill({status:200, contentType:"text/javascript",
+                                                body: stubEngine([enc({"Bombus vosnesenskii":0.85})])}));
   await ctx.addInitScript(()=>{
     try{ Object.defineProperty(navigator,"serviceWorker",{get:()=>undefined}); }catch(e){}
     navigator.mediaDevices.getUserMedia = () => Promise.reject(

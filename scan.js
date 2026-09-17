@@ -42,7 +42,7 @@ const STUCK_FRAMES = 8;
 
 const S = {
   worker: null, stream: null, video: null, canvas: null, ctx: null,
-  running: false, seq: 0, inflight: false,
+  running: false, pumping: false,
   acc: null,                 // accumulated probability vector
   frames: 0, lastMs: 0,
   best: null,                // {name, rank, p, tpl}
@@ -109,22 +109,45 @@ function grabFrame(){
   return out;
 }
 
-/* --- the loop ------------------------------------------------------------- */
-function pump(){
-  if (!S.running) return;
-  if (!S.inflight){
-    const px = grabFrame();
-    if (px){
-      S.inflight = true;
-      const seq = ++S.seq;
-      S.worker.postMessage({t:"frame", seq, pixels:px}, [px.buffer]);
+/* --- the loop -------------------------------------------------------------
+   Each inference blocks JavaScript for about 1.17 s (see engine.js for why it
+   cannot be moved off the main thread). Two consequences shape this loop:
+
+     * a short sleep between inferences, so taps and paints queued during the
+       blocked stretch actually get their turn;
+     * the loop STOPS the moment a species locks. That is the one moment the
+       user wants to press something, and a button that takes a second to
+       notice a tap feels broken. Tapping the viewfinder starts it again.    */
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+async function pump(){
+  if (S.pumping) return;
+  S.pumping = true;
+  try{
+    while (S.running){
+      const px = grabFrame();
+      if (!px){ await sleep(120); continue; }
+      let r;
+      try{ r = await AGE.run(px); }
+      catch(e){
+        S.fail = "The classifier stopped working (" + (e.message||e) + ").";
+        paintFail(); return;
+      }
+      if (!S.running) break;
+      onProbs(r.probs, r.ms);
+      if (S.locked){ S.running = false; paint(); break; }
+      await sleep(140);
     }
-  }
-  requestAnimationFrame(pump);
+  } finally { S.pumping = false; }
+}
+
+function resume(){
+  if (S.running || !S.stream || S.fail || !AGE.ready) return;
+  S.running = true;
+  pump();
 }
 
 function onProbs(probs, ms){
-  S.inflight = false;
   S.lastMs = ms;
   S.frames++;
 
@@ -252,7 +275,8 @@ function paint(){
     </div>`;
 
   if (S.locked){
-    msg.textContent = "Identified. Record it.";
+    msg.textContent = S.running ? "Identified. Record it."
+                                : "Identified — scanning paused. Record it, or tap the view to keep looking.";
     btn.disabled = false;
     btn.textContent = `Record ${AGR.niceName(S.locked.name)}`;
     el("coarse").hidden = true;
@@ -305,6 +329,7 @@ async function recordFrom(pick){
   S.best = null; S.locked = null; S.ladder = []; S.roll = null;
   paint();
   out.scrollIntoView({behavior:"smooth", block:"nearest"});
+  resume();
 }
 
 /* --- boot ---------------------------------------------------------------- */
@@ -321,28 +346,29 @@ async function initScanner(){
 
   const ok = await startCamera();
 
-  S.worker = new Worker("worker.js", {type:"module"});
-  S.worker.onmessage = (e)=>{
-    const m = e.data;
-    if (m.t === "stage")   return stage(m.s, m.note);
-    if (m.t === "ready"){
-      if (ok){ S.running = true; requestAnimationFrame(pump); }
-      else { S.fail = S.fail || "No camera."; paintFail(); }
-      return;
-    }
-    if (m.t === "probs")   return onProbs(m.probs, m.ms);
-    if (m.t === "dropped"){ S.inflight = false; return; }
-    if (m.t === "fail"){
-      S.inflight = false;
-      S.fail = "The classifier couldn't start (" + m.why + "). You can still record by picking a species.";
-      paintFail();
-      return;
-    }
-  };
-  S.worker.postMessage({t:"init"});
+  try{
+    await AGE.init(stage);
+  }catch(e){
+    S.fail = "The classifier couldn't start (" + (e && e.message || e) +
+             "). You can still record by picking a species.";
+    paintFail();
+  }
+
+  if (!S.fail){
+    if (ok){ resume(); }
+    else { paintFail(); }
+  }
 
   el("snap").addEventListener("click", ()=>{ if (S.locked) recordFrom(S.locked); });
   el("coarsebtn").addEventListener("click", ()=>{ if (S.best) recordFrom(S.best); });
+  // Tapping the viewfinder restarts a stopped scan — the way out of a lock on
+  // the wrong animal, or on one that has since flown off.
+  el("camwrap").addEventListener("click", ()=>{
+    if (S.running || S.fail) return;
+    S.acc = null; S.frames = 0; S.lockCount = 0; S.coarseCount = 0;
+    S.best = null; S.locked = null; S.ladder = []; S.roll = null;
+    paint(); resume();
+  });
   el("togglepicker").addEventListener("click", ()=>{
     const p = el("pickerfall");
     p.hidden = !p.hidden;
@@ -354,7 +380,7 @@ async function initScanner(){
     // Holding a camera stream open in the background drains the battery and iOS
     // may kill the tab for it.
     if (document.hidden) S.running = false;
-    else if (S.stream && !S.fail){ S.running = true; requestAnimationFrame(pump); }
+    else resume();
   });
 }
 

@@ -6,9 +6,9 @@
    first opens. It is cached by the generic same-origin rule below, the first
    time the scanner loads it. Bump CACHE on every deploy — the old cache is
    deleted on activate. */
-const CACHE = "animalgo-v8";
+const CACHE = "animalgo-v9";
 const SHELL = [
-  "./", "./index.html", "./app.js", "./rollup.js", "./scan.js", "./worker.js",
+  "./", "./index.html", "./app.js", "./rollup.js", "./engine.js", "./scan.js",
   "./styles.css", "./manifest.webmanifest",
   "./data/stat_grid.json", "./data/taxonomy.json", "./data/species.json",
   "./icons/icon-192.png", "./icons/icon-512.png", "./icons/icon-180.png",
