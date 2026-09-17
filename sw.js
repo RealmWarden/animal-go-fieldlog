@@ -1,15 +1,32 @@
 /* Offline shell for the Animal Go field log.
-   Cache-first: once installed, the app runs with no network at all. The species
-   data is ~670 KB and never changes between releases, so it is cached with the
-   shell rather than fetched each launch. The 22 MB classifier is deliberately
-   NOT in the shell — installing it would mean a 22 MB download before the app
-   first opens. It is cached by the generic same-origin rule below, the first
-   time the scanner loads it. Bump CACHE on every deploy — the old cache is
-   deleted on activate. */
-const CACHE = "animalgo-v9";
+
+   Two caching strategies, split by whether the file changes between releases.
+   The split is not a micro-optimisation: a uniformly cache-first service worker
+   masked a broken deploy three separate times in this project — a stale model
+   file that looked like a model bug, an old taxonomy on the phone, and a
+   scanner that could not start while the page insisted everything was fine.
+   Cache-first is exactly wrong for code, because it means the newest version of
+   the app is the last thing the app will show you.
+
+     code and markup  -> NETWORK FIRST, cache as a fallback.
+                         Costs a few hundred milliseconds on a cold launch with
+                         signal. Buys: what you see is what was deployed, and
+                         full function with no signal at all.
+     data and assets  -> CACHE FIRST.
+                         The species data (~670 KB), the 22 MB classifier, the
+                         Wikipedia photographs, the fonts and the classifier
+                         runtime. These are immutable per release, large, or
+                         both. The model is deliberately NOT in the shell list:
+                         installing it would mean a 22 MB download before the
+                         app first opens. It lands in the cache the first time
+                         the scanner loads it.
+
+   Bump CACHE on every deploy; the old cache is deleted on activate. */
+const CACHE = "animalgo-v10";
+
 const SHELL = [
   "./", "./index.html", "./app.js", "./rollup.js", "./engine.js", "./scan.js",
-  "./styles.css", "./manifest.webmanifest",
+  "./worker.js", "./styles.css", "./manifest.webmanifest",
   "./data/stat_grid.json", "./data/taxonomy.json", "./data/species.json",
   "./icons/icon-192.png", "./icons/icon-512.png", "./icons/icon-180.png",
 ];
@@ -31,43 +48,49 @@ self.addEventListener("activate", e => {
   );
 });
 
+const put = (req, res) => {
+  if (res && res.ok) {
+    const copy = res.clone();
+    caches.open(CACHE).then(c => c.put(req, copy)).catch(() => {});
+  }
+  return res;
+};
+
 self.addEventListener("fetch", e => {
   const req = e.request;
   if (req.method !== "GET") return;
+  const url = new URL(req.url);
 
-  // Fonts from a CDN, and species photos from Wikimedia: serve from cache,
-  // refresh in the background. Caching the photos is what keeps a record
-  // illustrated when you are out of signal.
-  const isFont = /fonts\.(googleapis|gstatic)\.com/.test(req.url);
-  // The classifier runtime, until it is vendored into the repo. jsdelivr sends
-  // permissive CORS headers, so the cached copy is a real (non-opaque) response
-  // and the worker's dynamic import of it still works with no network. This is
-  // what keeps the offline promise true while the runtime lives on a CDN.
-  const isRuntime = /cdn\.jsdelivr\.net\/npm\/@litertjs/.test(req.url);
-  const isPhoto = /(thumb\.wikimedia\.org|upload\.wikimedia\.org)/.test(req.url);
-  if (isFont || isPhoto || isRuntime) {
-    e.respondWith(caches.match(req).then(hit => hit || fetch(req).then(res => {
-      const copy = res.clone();
-      caches.open(CACHE).then(c => c.put(req, copy)).catch(() => {});
-      return res;
-    }).catch(() => hit || Response.error())));
+  // Immutable, cross-origin: fonts, Wikipedia photographs, the classifier
+  // runtime. Caching the photos is what keeps a record illustrated out of
+  // signal; caching the runtime is what keeps the scanner working out of
+  // signal while the runtime still lives on a CDN.
+  const immutableRemote =
+    /fonts\.(googleapis|gstatic)\.com/.test(req.url) ||
+    /(thumb\.wikimedia\.org|upload\.wikimedia\.org)/.test(req.url) ||
+    /cdn\.jsdelivr\.net\/npm\/@litertjs/.test(req.url);
+
+  if (immutableRemote) {
+    e.respondWith(caches.match(req).then(hit =>
+      hit || fetch(req).then(res => put(req, res)).catch(() => Response.error())));
     return;
   }
 
-  if (new URL(req.url).origin !== location.origin) return;
+  if (url.origin !== location.origin) return;
 
-  // The diagnostic pages always take the network copy, so a newer version is
-  // never masked by the offline cache. This has bitten once already: a cached
-  // model file hid a fixed one and looked like a model bug for an hour.
-  if (/\/(bench|scan-test)\.html$/.test(new URL(req.url).pathname)) return;
+  // Immutable, same-origin: the model parts and the species data.
+  if (/\/(model|data)\//.test(url.pathname)) {
+    e.respondWith(caches.match(req).then(hit =>
+      hit || fetch(req).then(res => put(req, res))));
+    return;
+  }
 
+  // The diagnostics are never cached at all, so a newer one cannot be masked.
+  if (/\/(bench|scan-test)\.html$/.test(url.pathname)) return;
+
+  // Everything else — the app itself. Network first.
   e.respondWith(
-    caches.match(req).then(hit => hit || fetch(req).then(res => {
-      if (res.ok) {
-        const copy = res.clone();
-        caches.open(CACHE).then(c => c.put(req, copy)).catch(() => {});
-      }
-      return res;
-    }).catch(() => caches.match("./index.html")))
+    fetch(req).then(res => put(req, res))
+      .catch(() => caches.match(req).then(hit => hit || caches.match("./index.html")))
   );
 });
