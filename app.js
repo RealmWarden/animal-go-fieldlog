@@ -217,11 +217,11 @@ const imgPending=new Set();
 
 function saveImgs(){ try{ localStorage.setItem(IMG_KEY,JSON.stringify(IMGS)); }catch(e){} }
 
-// Wikimedia thumb URLs carry their width in the path; 330 is soft on a retina
-// phone. Widen it, and fall back to the original if the pattern ever changes.
-function widen(u,px=640){
-  return /\/\d+px-/.test(u) ? u.replace(/\/\d+px-/, "/"+px+"px-") : u;
-}
+// Use the thumbnail URL exactly as the API returns it. Rewriting the width in
+// the path (330px -> 640px) looks like it should work and returns HTTP 400 from
+// Wikimedia: only the width the API generated is served. Tested against the live
+// API — the 330px URL returns 200, the rewritten 640px one returns 400.
+function widen(u){ return u; }
 
 async function wikiLookup(title){
   try{

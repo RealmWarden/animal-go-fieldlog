@@ -13,7 +13,7 @@
       3
     ],
     "dtype": "float32",
-    "preprocess": "resize 299x299, x/127.5 - 1"
+    "preprocess": "resize/centre-crop to 299x299 and pass RAW 0-255 float values. NOT x/127.5-1: the Xception convention gives garbage here (top probability ~0.04, input-insensitive). Normalisation is baked into the graph. Verified against live photographs."
   },
   "output": {
     "shape": [
@@ -40,5 +40,12 @@
       "file": "inat-vision.part3",
       "bytes": 1197168
     }
-  ]
+  ],
+  "verified": {
+    "runtime": "@litertjs/core 2.5.3, accelerator wasm (webgpu errored on this model)",
+    "compileMs": 98,
+    "inferenceMs": "~800 on a desktop CPU",
+    "outputs": "probabilities, sum to 1.0 exactly \u2014 no softmax needed",
+    "spotCheck": "8 species photographs: 6 exact top-1, 1 correct at rank 2 (crow vs raven), 1 miss (Anax junius -> another dragonfly)"
+  }
 }
