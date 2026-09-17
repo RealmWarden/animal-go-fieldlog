@@ -198,6 +198,59 @@ function seedSamples(){
 }
 
 /* ============================================================
+   First-run walkthrough
+
+   Design doc s9a listed "a tutorial is still needed" as an open task. It stopped
+   being theoretical the first time someone opened this on a phone and could not
+   tell what it wanted from them. Four cards, skippable, reopenable from the ?
+   button — plus permanent one-line hints under each control, because a
+   walkthrough you saw once is not documentation.
+   ============================================================ */
+const INTRO_KEY="animalgo.introSeen";
+const INTRO=[
+ {t:"This stands in for a camera",
+  b:"The finished app identifies animals through your phone's camera. That part isn't built yet — so for now you <b>pick the animal from a list</b>, as if you'd just spotted one."},
+ {t:"Recording an animal",
+  b:"Say how good a look you got, then tap <b>Scan &amp; record</b>. You get that one specific individual: its weight, how big it is for its species, and its stats. Record the same species twice and you get two different animals."},
+ {t:"Sometimes it can't tell",
+  b:"A poor view may only narrow it to a genus — <b>Bombus sp.</b>, one of seven bumblebees. That's still a real record, it just doesn't fill a dex slot yet. <b>Observe longer</b> tries to pin it down, but the animal may leave first."},
+ {t:"Your collection",
+  b:"<b>Collection</b> lists everything you've recorded — star up to six as your active squad, and only those gain experience when you walk. <b>Dex</b> tracks how many of the 296 species you've found. The records already in there are examples; Clear all removes them."},
+];
+let introAt=0;
+
+function showIntro(from=0){
+  introAt=from;
+  paintIntro();
+  document.getElementById("intro").hidden=false;
+}
+function paintIntro(){
+  const s=INTRO[introAt];
+  document.getElementById("introStep").textContent=`${introAt+1} of ${INTRO.length}`;
+  document.getElementById("introTitle").textContent=s.t;
+  document.getElementById("introBody").innerHTML=s.b;
+  document.getElementById("introNext").textContent =
+    introAt===INTRO.length-1 ? "Start recording" : "Next";
+  document.getElementById("introSkip").hidden = introAt===INTRO.length-1;
+}
+function closeIntro(){
+  document.getElementById("intro").hidden=true;
+  try{ localStorage.setItem(INTRO_KEY,"1"); }catch(e){}
+}
+function wireIntro(){
+  document.getElementById("introNext").addEventListener("click",()=>{
+    if(introAt<INTRO.length-1){ introAt++; paintIntro(); } else closeIntro();
+  });
+  document.getElementById("introSkip").addEventListener("click",closeIntro);
+  document.getElementById("help").addEventListener("click",()=>showIntro(0));
+}
+function maybeShowIntro(){
+  let seen=false;
+  try{ seen = localStorage.getItem(INTRO_KEY)==="1"; }catch(e){}
+  if(!seen) showIntro(0);
+}
+
+/* ============================================================
    UI
    ============================================================ */
 const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
@@ -213,6 +266,18 @@ function fmtMass(g){
 const fmtDate=iso=>new Date(iso).toLocaleDateString(undefined,{month:"short",day:"numeric",year:"numeric"});
 
 /* --- species picker --- */
+// A walkthrough you saw once isn't documentation — these stay on the controls.
+function addHints(){
+  const put=(sel,text)=>{
+    const el=document.querySelector(sel); if(!el) return;
+    const p=document.createElement("p"); p.className="hint"; p.textContent=text;
+    el.insertAdjacentElement("afterend",p);
+  };
+  put("#species","Stands in for the camera — pick what you spotted.");
+  put("#viewseg","How good a look you got. A worse view means a vaguer identification.");
+  put(".seg[role=group]:not(#viewseg)","Pets and zoo animals are collected but don't count toward the dex.");
+}
+
 function fillPicker(){
   const sel=$("#species");
   [...SPECIES].sort((a,b)=>a.cn.localeCompare(b.cn)).forEach(s=>{
@@ -472,9 +537,10 @@ async function loadData(){
   }
   document.getElementById("boot").hidden = true;
   document.getElementById("app").hidden = false;
-  fillPicker(); wire();
+  fillPicker(); addHints(); wire(); wireIntro();
   await initStore();
   renderAll();
+  maybeShowIntro();
 
   if("serviceWorker" in navigator){
     try{ await navigator.serviceWorker.register("sw.js"); }catch(e){}

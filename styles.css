@@ -204,3 +204,34 @@ h3{font-family:var(--fs-ui); font-size:11px; letter-spacing:.1em; text-transform
   color:var(--ink-3); margin:0 0 9px; font-weight:700}
 .sr{position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0)}
 @media (prefers-reduced-motion:reduce){*{transition:none!important; animation:none!important}}
+
+/* ---------- first-run walkthrough ---------- */
+.intro{
+  position:fixed; inset:0; z-index:80; display:flex; align-items:center; justify-content:center;
+  padding:24px; background:rgba(10,16,14,.55); backdrop-filter:blur(3px);
+}
+.intro-card{
+  box-sizing:border-box;
+  background:var(--surface); border:1px solid var(--line-2); border-left:3px solid var(--accent);
+  border-radius:var(--radius); padding:20px; max-width:420px; width:100%;
+  box-shadow:0 10px 40px rgba(0,0,0,.28);
+}
+.intro-step{font-family:var(--fs-num); font-size:10.5px; letter-spacing:.12em;
+  text-transform:uppercase; color:var(--ink-3)}
+.intro-title{font-family:var(--fs-sci); font-size:21px; font-weight:600; margin:8px 0 0;
+  line-height:1.2; text-wrap:balance}
+.intro-body{font-size:14.5px; line-height:1.55; color:var(--ink-2); margin:10px 0 0}
+.intro-body b{color:var(--ink); font-weight:600}
+.intro-nav{display:flex; gap:8px; margin-top:18px}
+/* .btn is width:100% by default, which blows the flex row past the card */
+.intro-nav .btn{width:auto; flex:1 1 0; min-width:0; padding-inline:10px}
+.intro-nav .btn.ghost{flex:0 1 auto}
+
+/* ---------- inline hints on controls ---------- */
+.hint{font-size:12px; line-height:1.45; color:var(--ink-3); margin:-2px 0 6px}
+.helpbtn{
+  appearance:none; border:1px solid var(--line-2); background:transparent; color:var(--ink-3);
+  width:24px; height:24px; border-radius:50%; cursor:pointer; font-family:var(--fs-ui);
+  font-weight:700; font-size:13px; line-height:1; padding:0; flex:0 0 auto;
+}
+.helpbtn:hover{border-color:var(--accent); color:var(--accent)}

@@ -32,7 +32,10 @@
   <header class="topbar">
     <div class="brandrow">
       <div class="brand">Animal&nbsp;Go <em>field log</em></div>
-      <div class="walked" id="walked">0.0 km</div>
+      <div class="row" style="gap:8px">
+        <div class="walked" id="walked">0.0 km</div>
+        <button class="helpbtn" id="help" title="How this works" aria-label="How this works">?</button>
+      </div>
     </div>
     <div class="meter">
       <div class="meter-head"><span>National dex</span><span id="dexcount">0 / 296</span></div>
@@ -137,6 +140,18 @@
   <p class="note" style="margin-top:8px">iOS can clear a web app's storage after weeks
   of disuse. Export now and then — it's the only real backup.</p>
 </div>
+</div>
+
+<div id="intro" class="intro" hidden role="dialog" aria-modal="true" aria-labelledby="introTitle">
+  <div class="intro-card">
+    <div class="intro-step" id="introStep">1 of 4</div>
+    <h2 class="intro-title" id="introTitle"></h2>
+    <p class="intro-body" id="introBody"></p>
+    <div class="intro-nav">
+      <button class="btn ghost" id="introSkip" style="border:1px solid var(--line-2)">Skip</button>
+      <button class="btn" id="introNext">Next</button>
+    </div>
+  </div>
 </div>
 
 <div id="toast" class="toast" hidden role="status" aria-live="polite"></div>
