@@ -198,6 +198,82 @@ function seedSamples(){
 }
 
 /* ============================================================
+   Reference images
+
+   Knowing WHAT you just found is the point of the app, and a picture answers
+   that better than a stat block. It also does two things the design needed
+   anyway: it lets you confirm an animal from where you are standing rather than
+   creeping closer (design doc s11.1), and it turns an unresolved genus record
+   from a useless string — "Bombus sp., one of seven" — into seven photographs.
+
+   Fetched from Wikipedia one species at a time, the first time you meet it, and
+   remembered after. NEVER batched: a 296-species sweep gets HTTP 429 within
+   seconds, while the natural one-at-a-time pattern never comes close.
+   ============================================================ */
+const IMG_KEY="animalgo.img.v1";
+let IMGS={};
+try{ IMGS=JSON.parse(localStorage.getItem(IMG_KEY)||"{}"); }catch(e){}
+const imgPending=new Set();
+
+function saveImgs(){ try{ localStorage.setItem(IMG_KEY,JSON.stringify(IMGS)); }catch(e){} }
+
+// Wikimedia thumb URLs carry their width in the path; 330 is soft on a retina
+// phone. Widen it, and fall back to the original if the pattern ever changes.
+function widen(u,px=640){
+  return /\/\d+px-/.test(u) ? u.replace(/\/\d+px-/, "/"+px+"px-") : u;
+}
+
+async function wikiLookup(title){
+  try{
+    const r=await fetch("https://en.wikipedia.org/api/rest_v1/page/summary/"+
+      encodeURIComponent(title.replace(/ /g,"_")),{headers:{Accept:"application/json"}});
+    if(!r.ok) return null;                      // 404 = no page, 429 = slow down
+    const d=await r.json();
+    if(d.type==="disambiguation"||!d.thumbnail) return null;
+    return {t:d.title, u:widen(d.thumbnail.source), d:d.description||"",
+            p:(d.content_urls&&d.content_urls.desktop)?d.content_urls.desktop.page:""};
+  }catch(e){ return null; }
+}
+
+// Resolve one taxon's picture. Species are looked up by binomial then common
+// name; a genus or family record borrows its first member's picture, so a coarse
+// record still shows you something.
+async function ensureImage(name, onDone){
+  if(IMGS[name]!==undefined || imgPending.has(name)) return;
+  imgPending.add(name);
+  const tx=TX[name];
+  let hit=await wikiLookup(name);
+  if(!hit && tx && tx.c && tx.c!==name && tx.r==="species") hit=await wikiLookup(tx.c);
+  if(!hit && tx && tx.r!=="species" && tx.mem && tx.mem.length){
+    const m=tx.mem[0];
+    hit = IMGS[m] || await wikiLookup(m);
+    if(hit) hit={...hit, borrowed:m};
+  }
+  IMGS[name]=hit||null;                          // null is a remembered miss
+  imgPending.delete(name); saveImgs();
+  if(onDone) onDone();
+}
+
+function capMarkup(name){
+  const h=IMGS[name];
+  if(!h) return "";
+  const who = h.borrowed ? `${h.t} — photo of ${h.borrowed}` : h.t;
+  return `<figcaption class="shotcap">${who} · <a href="${h.p}" target="_blank" rel="noopener">Wikipedia</a></figcaption>`;
+}
+
+function imgMarkup(name, cls){
+  const h=IMGS[name];
+  // A photo can fail even once resolved — offline on first sight, or a URL that
+  // has moved. Degrade to the same neutral block as a known miss rather than
+  // leaving the browser's broken-image icon and alt text on the card.
+  const fail = "this.onerror=null;this.removeAttribute('src');this.classList.add('noimg');";
+  const alt = cls === "shot" ? (h ? h.t : "") : "";   // small thumbs are decorative
+  if(h) return `<img class="${cls}" src="${h.u}" alt="${alt}" loading="lazy" onerror="${fail}">`;
+  if(IMGS[name]===null) return `<div class="${cls} noimg" aria-hidden="true"></div>`;
+  return `<div class="${cls} loadimg" aria-hidden="true"></div>`;
+}
+
+/* ============================================================
    First-run walkthrough
 
    Design doc s9a listed "a tutorial is still needed" as an open task. It stopped
@@ -308,12 +384,22 @@ function renderSpecimen(rec,{isNewDex,isBest,note}={}){
     : `Recorded at <b>${fmtMass(rec.mass)}</b> — ${rec.pct.toFixed(0)}th percentile,
        ${sizeNote(rec.pct)}.`;
 
+  ensureImage(rec.sn, ()=>{ const out=document.getElementById("result");
+    if(out && out.contains(el)) el.querySelector(".shotwrap").innerHTML =
+      imgMarkup(rec.sn,"shot") + capMarkup(rec.sn); });
+
   el.innerHTML=`
+    <div class="shotwrap">${imgMarkup(rec.sn,"shot")}${capMarkup(rec.sn)}</div>
     <div class="sci">${coarse?(rec.rank==="genus"?rec.sn+" sp.":rec.sn):rec.sn}<span
       class="rank-pill" data-r="${rec.rank}">${rec.rank} · ${Math.round(rec.conf*100)}%</span></div>
     <div class="common">${rec.cn}</div>
     <div class="tagline">${massLine}</div>
-    ${coarse&&rec.cands.length?`<div class="cand">candidates: ${rec.cands.join(" · ")}</div>`:""}
+    ${coarse&&rec.cands.length?`<div class="cand">It is one of these:</div>
+      <div class="candgrid">${rec.cands.map(m=>{
+        ensureImage(m,()=>{const g=el.querySelector(`[data-cand="${m}"]`);
+          if(g) g.innerHTML=imgMarkup(m,"candimg")+`<span>${(TX[m]&&TX[m].c)||m}</span>`;});
+        return `<figure data-cand="${m}">${imgMarkup(m,"candimg")}<span>${(TX[m]&&TX[m].c)||m}</span></figure>`;
+      }).join("")}</div>`:""}
     <div class="datagrid">
       <div class="cell"><div class="k">HP</div><div class="v">${rec.hp}</div></div>
       <div class="cell"><div class="k">Atk</div><div class="v">${rec.atk}</div></div>
@@ -419,7 +505,10 @@ function renderList(){
   rows.forEach(r=>{
     const [t,tn]=masteryFor(r.xp);
     const d=document.createElement("div"); d.className="rec";
+    ensureImage(r.sn, ()=>{ const s=d.querySelector(".rowimgwrap");
+      if(s) s.innerHTML=imgMarkup(r.sn,"rowimg"); });
     d.innerHTML=`
+      <span class="rowimgwrap">${imgMarkup(r.sn,"rowimg")}</span>
       <button class="star" aria-pressed="${r.squad}" title="Active squad" data-uid="${r.uid}">${r.squad?"★":"☆"}</button>
       <div class="rec-main">
         <div class="rec-sci">${r.rank==="genus"?r.sn+" sp.":r.sn}${
@@ -447,7 +536,10 @@ function renderDex(){
   [...SPECIES].sort((a,b)=>a.cl.localeCompare(b.cl)||a.cn.localeCompare(b.cn)).forEach(s=>{
     const d=document.createElement("div");
     d.className="dexcell"+(got[s.sn]?" got":"");
-    d.innerHTML=`<div class="dn">${got[s.sn]?s.sn:"—"}</div>
+    if(got[s.sn]) ensureImage(s.sn, ()=>{ const w=d.querySelector(".dexthumbwrap");
+      if(w) w.innerHTML=imgMarkup(s.sn,"dexthumb"); });
+    d.innerHTML=`${got[s.sn]?`<span class="dexthumbwrap">${imgMarkup(s.sn,"dexthumb")}</span>`:""}
+      <div class="dn">${got[s.sn]?s.sn:"—"}</div>
       <div class="dc">${got[s.sn]?s.cn:"unrecorded"}</div>
       ${got[s.sn]?`<div class="db">best ${fmtMass(got[s.sn])}</div>`:""}`;
     g.appendChild(d);

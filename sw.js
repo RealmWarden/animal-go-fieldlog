@@ -3,7 +3,7 @@
    data is ~670 KB and never changes between releases, so it is cached with the
    shell rather than fetched each launch. Bump CACHE on every deploy — the old
    cache is deleted on activate. */
-const CACHE = "animalgo-v2";
+const CACHE = "animalgo-v3";
 const SHELL = [
   "./", "./index.html", "./app.js", "./styles.css", "./manifest.webmanifest",
   "./data/stat_grid.json", "./data/taxonomy.json", "./data/species.json",
@@ -31,14 +31,17 @@ self.addEventListener("fetch", e => {
   const req = e.request;
   if (req.method !== "GET") return;
 
-  // Fonts come from a CDN: serve from cache, refresh in the background.
+  // Fonts from a CDN, and species photos from Wikimedia: serve from cache,
+  // refresh in the background. Caching the photos is what keeps a record
+  // illustrated when you are out of signal.
   const isFont = /fonts\.(googleapis|gstatic)\.com/.test(req.url);
-  if (isFont) {
+  const isPhoto = /(thumb\.wikimedia\.org|upload\.wikimedia\.org)/.test(req.url);
+  if (isFont || isPhoto) {
     e.respondWith(caches.match(req).then(hit => hit || fetch(req).then(res => {
       const copy = res.clone();
       caches.open(CACHE).then(c => c.put(req, copy)).catch(() => {});
       return res;
-    }).catch(() => hit)));
+    }).catch(() => hit || Response.error())));
     return;
   }
 
