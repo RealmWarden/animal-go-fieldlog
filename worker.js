@@ -81,13 +81,24 @@ async function loadModel(){
   say({t:"stage", s:"compile", note:"ok"});
 }
 
-function toProbs(out){
-  // LiteRT hands back an array of output tensors; shapes vary by wrapper version.
-  let v = out;
-  while (v && typeof v.length === "number" && v.length === 1 && !(v instanceof Float32Array)) v = v[0];
-  if (v && typeof v.toTypedArray === "function") v = v.toTypedArray();
-  else if (v && v.data) v = v.data;
-  let arr = v instanceof Float32Array ? v : Float32Array.from(v);
+/* Unwrap whatever loadAndCompile's model.run() hands back.
+
+   This is the part that had to be learned from the runtime rather than its
+   docs, and getting it wrong does not look like an error: run() may return a
+   promise, the result may be an array or an object keyed by output name, and
+   toTypedArray() is ASYNC. A synchronous read of it yields a zero-length array,
+   which the rollup then reports as "nothing recognised" -- a broken pipeline
+   that looks exactly like a model too weak to identify anything. */
+async function toProbs(out){
+  let r = out;
+  if (r && r.then) r = await r;
+  let f = Array.isArray(r) ? r[0] : (r && typeof r === "object" && !(r instanceof Float32Array)
+            ? r[Object.keys(r)[0]] : r);
+  let arr = f;
+  if (arr && typeof arr.toTypedArray === "function") arr = await arr.toTypedArray();
+  else if (arr && arr.data) arr = arr.data;
+  if (!(arr instanceof Float32Array)) arr = Float32Array.from(arr || []);
+  if (!arr.length) throw new Error("model returned an empty output");
 
   // The published iNat model already ends in softmax, but "already normalised"
   // is an assumption worth one cheap check rather than a silent 1/507 readout
@@ -131,8 +142,7 @@ self.onmessage = async (e) => {
     const t0 = performance.now();
     try{
       const input = L.Tensor.fromTypedArray(msg.pixels, [1, SIDE, SIDE, 3]);
-      const out = model.run([input]);
-      const probs = toProbs(out);
+      const probs = await toProbs(model.run([input]));
       const copy = new Float32Array(probs);         // detach from runtime memory
       try{ input.delete?.(); }catch(_){}
       say({t:"probs", seq: msg.seq, ms: Math.round(performance.now()-t0), probs: copy}, [copy.buffer]);

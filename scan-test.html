@@ -77,12 +77,21 @@ function frameFrom(img){
   return out;
 }
 
-function probsOf(out){
-  let v = out;
-  while (v && typeof v.length==="number" && v.length===1 && !(v instanceof Float32Array)) v = v[0];
-  if (v && typeof v.toTypedArray==="function") v = v.toTypedArray();
-  else if (v && v.data) v = v.data;
-  return v instanceof Float32Array ? v : Float32Array.from(v);
+// run() may return a promise, the result may be an array or an object keyed by
+// output name, and toTypedArray() is async. Reading it synchronously returns an
+// empty array, which reads as "the model recognised nothing" rather than as the
+// bug it is. Same unwrapping as worker.js.
+async function probsOf(out){
+  let r = out;
+  if (r && r.then) r = await r;
+  let f = Array.isArray(r) ? r[0]
+        : (r && typeof r === "object" && !(r instanceof Float32Array) ? r[Object.keys(r)[0]] : r);
+  let arr = f;
+  if (arr && typeof arr.toTypedArray === "function") arr = await arr.toTypedArray();
+  else if (arr && arr.data) arr = arr.data;
+  if (!(arr instanceof Float32Array)) arr = Float32Array.from(arr || []);
+  if (!arr.length) throw new Error("model returned an empty output");
+  return arr;
 }
 
 document.getElementById("go").onclick = async () => {
@@ -122,7 +131,7 @@ document.getElementById("go").onclick = async () => {
 
       const px = frameFrom(img);
       const t0 = performance.now();
-      const p = probsOf(model.run([L.Tensor.fromTypedArray(px,[1,299,299,3])]));
+      const p = await probsOf(model.run([L.Tensor.fromTypedArray(px,[1,299,299,3])]));
       const ms = Math.round(performance.now()-t0);
       times.push(ms);
 
