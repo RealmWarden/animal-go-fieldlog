@@ -333,6 +333,14 @@ const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
 let byName;
 let status="wild", viewQuality="partial", lastCoords=null;
 
+// Display names come from the live taxonomy rather than the stored record, so a
+// record captured before higher-taxon common names existed still reads well.
+function displayName(rec){
+  const t = TX[rec.sn];
+  const sci = rec.rank === "genus" ? rec.sn + " sp." : rec.sn;
+  return {sci, common: (t && t.c) || rec.cn || ""};
+}
+
 function fmtMass(g){
   if(g>=1000) return (g/1000).toFixed(g>=10000?0:2)+" kg";
   if(g>=1)    return g.toFixed(g>=100?0:1)+" g";
@@ -390,9 +398,9 @@ function renderSpecimen(rec,{isNewDex,isBest,note}={}){
 
   el.innerHTML=`
     <div class="shotwrap">${imgMarkup(rec.sn,"shot")}${capMarkup(rec.sn)}</div>
-    <div class="sci">${coarse?(rec.rank==="genus"?rec.sn+" sp.":rec.sn):rec.sn}<span
+    <div class="sci">${displayName(rec).sci}<span
       class="rank-pill" data-r="${rec.rank}">${rec.rank} · ${Math.round(rec.conf*100)}%</span></div>
-    <div class="common">${rec.cn}</div>
+    <div class="common">${displayName(rec).common}</div>
     <div class="tagline">${massLine}</div>
     ${coarse&&rec.cands.length?`<div class="cand">It is one of these:</div>
       <div class="candgrid">${rec.cands.map(m=>{
@@ -511,10 +519,10 @@ function renderList(){
       <span class="rowimgwrap">${imgMarkup(r.sn,"rowimg")}</span>
       <button class="star" aria-pressed="${r.squad}" title="Active squad" data-uid="${r.uid}">${r.squad?"★":"☆"}</button>
       <div class="rec-main">
-        <div class="rec-sci">${r.rank==="genus"?r.sn+" sp.":r.sn}${
+        <div class="rec-sci">${displayName(r).sci}${
           r.rank!=="species"?`<span class="rank-pill" data-r="${r.rank}">${r.rank}</span>`:""}</div>
-        <div class="rec-sub">${(()=>{const shown=r.rank==="genus"?r.sn+" sp.":r.sn;
-          return r.cn && r.cn!==shown ? r.cn+" · " : "";})()}${r.status} · ${r.place||"—"} · ${fmtDate(r.at)}</div>
+        <div class="rec-sub">${(()=>{const d=displayName(r);
+          return d.common && d.common!==d.sci ? d.common+" · " : "";})()}${r.status} · ${r.place||"—"} · ${fmtDate(r.at)}</div>
       </div>
       <div class="rec-right">
         <div class="mass">${fmtMass(r.mass)}</div>
@@ -540,7 +548,7 @@ function renderDex(){
       if(w) w.innerHTML=imgMarkup(s.sn,"dexthumb"); });
     d.innerHTML=`${got[s.sn]?`<span class="dexthumbwrap">${imgMarkup(s.sn,"dexthumb")}</span>`:""}
       <div class="dn">${got[s.sn]?s.sn:"—"}</div>
-      <div class="dc">${got[s.sn]?s.cn:"unrecorded"}</div>
+      <div class="dc">${got[s.sn]?((TX[s.sn]&&TX[s.sn].c)||s.cn):"unrecorded"}</div>
       ${got[s.sn]?`<div class="db">best ${fmtMass(got[s.sn])}</div>`:""}`;
     g.appendChild(d);
   });
