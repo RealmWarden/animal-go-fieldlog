@@ -52,34 +52,64 @@
 
   <!-- RECORD -->
   <section class="panel" id="p-record" role="tabpanel" aria-labelledby="tab-record">
+
+    <div class="camwrap" id="camwrap" data-state="boot">
+      <video id="cam" playsinline autoplay muted></video>
+      <div class="reticle" aria-hidden="true"></div>
+      <div class="camoverlay">
+        <div class="ladder" id="ladder"></div>
+        <div class="idcard" id="idcard"></div>
+      </div>
+      <div class="camboot" id="camboot">Starting the camera…</div>
+    </div>
+
+    <p class="scanmsg" id="scanmsg">Starting up…</p>
+    <button class="btn" id="snap" disabled>Record</button>
+    <div class="coarse" id="coarse" hidden>
+      <p class="note">The classifier can't split this one any finer. You can keep the record
+      at this rank — it counts as an observation but not a dex entry.</p>
+      <button class="btn tiny ghost" id="coarsebtn" style="border:1px solid var(--line-2)">Record anyway</button>
+    </div>
+
+    <!-- The specimen card goes directly under the button that produces it. It
+         used to sit at the bottom of the panel, below the locality fields and
+         the fallback list, so the payoff for a scan was off-screen. -->
+    <div id="result"></div>
+
     <label class="fld">
-      <span class="lbl">Species identified</span>
-      <select id="species"></select>
+      <span class="lbl">Locality</span>
+      <div class="row">
+        <input type="text" id="place" placeholder="e.g. Griffith Park, CA" value="">
+        <button class="btn tiny ghost" id="geo" type="button" style="border:1px solid var(--line-2)">GPS</button>
+      </div>
     </label>
     <div class="fld">
-      <span class="lbl">View quality</span>
-      <div class="seg" role="group" id="viewseg">
-        <button type="button" data-q="glimpse" aria-pressed="false">Glimpse</button>
-        <button type="button" data-q="partial" aria-pressed="true">Partial</button>
-        <button type="button" data-q="clear" aria-pressed="false">Clear</button>
-      </div>
-    </div>
-    <div class="fld">
-      <span class="lbl">Ownership status at time of scan</span>
+      <span class="lbl">Ownership status</span>
       <div class="seg" role="group">
         <button type="button" data-v="wild" aria-pressed="true">Wild</button>
         <button type="button" data-v="captive" aria-pressed="false">Captive / pet</button>
       </div>
     </div>
-    <label class="fld">
-      <span class="lbl">Locality</span>
-      <div class="row">
-        <input type="text" id="place" placeholder="e.g. Griffith Park, CA" value="Griffith Park, CA">
-        <button class="btn tiny ghost" id="geo" type="button" style="border:1px solid var(--line-2)">GPS</button>
+
+    <button class="linkish" id="togglepicker" type="button">Can't scan it? Pick from the list</button>
+    <div id="pickerfall" hidden>
+      <p class="note">A fallback for when the camera can't get a look — a bird already gone, or
+      permission denied. Identification quality is simulated here, not measured.</p>
+      <label class="fld">
+        <span class="lbl">Species</span>
+        <select id="species"></select>
+      </label>
+      <div class="fld">
+        <span class="lbl">View quality</span>
+        <div class="seg" role="group" id="viewseg">
+          <button type="button" data-q="glimpse" aria-pressed="false">Glimpse</button>
+          <button type="button" data-q="partial" aria-pressed="true">Partial</button>
+          <button type="button" data-q="clear" aria-pressed="false">Clear</button>
+        </div>
       </div>
-    </label>
-    <button class="btn" id="record">Scan &amp; record</button>
-    <div id="result"></div>
+      <button class="btn ghost" id="record" style="border:1px solid var(--line-2)">Record from the list</button>
+    </div>
+
   </section>
 
   <!-- COLLECTION -->
@@ -125,10 +155,10 @@
   </section>
 
   <p class="note" style="margin-top:14px">
-    Prototype of the collection loop only. The 296 species are the real roster of
-    iNaturalist's published on-device classifier; the picker plus view quality stands in for
-    the camera scan and its confidence. Stats are derived from allometric scaling, not
-    measured, and 59% of body masses are family-typical estimates rather than species figures.
+    Identification runs entirely on your phone, using iNaturalist's published on-device
+    classifier over its real roster of 296 animals. Nothing is uploaded. Stats are derived
+    from allometric scaling rather than measured, and 59% of body masses are still
+    family-typical estimates rather than species figures.
   </p>
   <div class="row" style="flex-wrap:wrap; gap:6px; margin-top:10px">
     <button class="btn tiny ghost" id="export" style="border:1px solid var(--line-2)">Export records</button>
@@ -158,6 +188,10 @@
 
 <div id="toast" class="toast" hidden role="status" aria-live="polite"></div>
 
+<!-- rollup.js and scan.js first: app.js kicks off its boot sequence the moment it
+     parses, and that sequence calls into the scanner. -->
+<script src="rollup.js"></script>
+<script src="scan.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

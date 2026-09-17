@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Animal Go — classifier accuracy check</title>
+<style>
+ body{font:14px/1.5 system-ui,sans-serif; margin:0; padding:16px; max-width:820px;
+      background:#fff; color:#141C18}
+ h1{font-size:17px; margin:0 0 4px}
+ p.note{color:#6B7873; font-size:12.5px; margin:0 0 14px}
+ button{font:inherit; font-weight:600; padding:10px 16px; border:1px solid #13575E;
+        background:#13575E; color:#fff; border-radius:3px; cursor:pointer}
+ #log{white-space:pre-wrap; font:11.5px/1.55 ui-monospace,monospace; margin-top:14px;
+      background:#F3F5F2; border:1px solid #E0E5DE; border-radius:3px; padding:10px}
+ table{border-collapse:collapse; width:100%; margin-top:14px; font-size:12px}
+ th,td{text-align:left; padding:5px 6px; border-bottom:1px solid #E3E8E2; vertical-align:top}
+ th{font-size:10px; text-transform:uppercase; letter-spacing:.08em; color:#6B7873}
+ td img{width:54px; height:54px; object-fit:cover; border-radius:2px; display:block}
+ .ok{color:#1B6B3A; font-weight:600}
+ .near{color:#8A6D1F; font-weight:600}
+ .bad{color:#9C2B1E; font-weight:600}
+ #sum{margin-top:14px; padding:10px 12px; background:#E9F1F1; border-radius:3px; font-size:13px}
+ canvas{display:none}
+</style>
+</head>
+<body>
+<h1>Classifier accuracy check</h1>
+<p class="note">Runs the real on-device classifier over Wikipedia photographs of 20 species
+that are in the roster, and reports what it said. This measures the model and the rollup, not
+the camera. <b>It is an upper bound:</b> these are curated photographs of the same kind the
+model was trained on — a phone pointed at a bee in long grass is harder. Needs a network
+connection for the photos. Everything prints to the log, so the whole result can be copied
+out of one page.</p>
+
+<button id="go">Run the check</button>
+<div id="sum" hidden></div>
+<table id="tbl" hidden><thead><tr>
+  <th>photo</th><th>expected</th><th>what it said</th><th>rank</th><th>conf</th><th>ms</th>
+</tr></thead><tbody></tbody></table>
+<div id="log">idle</div>
+<canvas id="cv" width="299" height="299"></canvas>
+
+<script src="rollup.js"></script>
+<script>
+const CASES = [
+  "Danaus plexippus","Apis mellifera","Bombus impatiens","Vanessa cardui",
+  "Junonia coenia","Papilio polyxenes","Coccinella septempunctata","Harmonia axyridis",
+  "Argiope aurantia","Araneus diadematus","Armadillidium vulgare","Helix pomatia",
+  "Corvus brachyrhynchos","Cardinalis cardinalis","Turdus migratorius","Anas platyrhynchos",
+  "Buteo jamaicensis","Sciurus carolinensis","Procyon lotor","Sceloporus occidentalis",
+  "Thamnophis sirtalis","Lithobates catesbeianus",
+];
+const RUNTIME = "https://cdn.jsdelivr.net/npm/@litertjs/core@2.5.3/+esm";
+const WASM    = "https://cdn.jsdelivr.net/npm/@litertjs/core@2.5.3/wasm/";
+const log = m => { const l=document.getElementById("log");
+                   l.textContent = (l.textContent==="idle"?"":l.textContent+"\n")+m; };
+
+let TAXONOMY, L, model;
+
+async function photo(sn){
+  const r = await fetch("https://en.wikipedia.org/api/rest_v1/page/summary/"+
+                        encodeURIComponent(sn.replace(/ /g,"_")));
+  if(!r.ok) return null;
+  const d = await r.json();
+  return d.thumbnail ? d.thumbnail.source : null;
+}
+
+function frameFrom(img){
+  const cv = document.getElementById("cv"), c = cv.getContext("2d",{willReadFrequently:true});
+  const w = img.naturalWidth, h = img.naturalHeight, s = Math.min(w,h);
+  // identical crop to scan.js: centre square, then scale
+  c.drawImage(img, (w-s)/2, (h-s)/2, s, s, 0, 0, 299, 299);
+  const d = c.getImageData(0,0,299,299).data;
+  const out = new Float32Array(299*299*3);
+  for (let i=0,j=0;i<d.length;i+=4){ out[j++]=d[i]; out[j++]=d[i+1]; out[j++]=d[i+2]; }
+  return out;
+}
+
+function probsOf(out){
+  let v = out;
+  while (v && typeof v.length==="number" && v.length===1 && !(v instanceof Float32Array)) v = v[0];
+  if (v && typeof v.toTypedArray==="function") v = v.toTypedArray();
+  else if (v && v.data) v = v.data;
+  return v instanceof Float32Array ? v : Float32Array.from(v);
+}
+
+document.getElementById("go").onclick = async () => {
+  document.getElementById("go").disabled = true;
+  try{
+    log("loading taxonomy…");
+    TAXONOMY = await fetch("data/taxonomy.json").then(r=>r.json());
+    AGR.build(TAXONOMY);
+
+    log("loading runtime…");
+    L = await import(RUNTIME);
+    await L.loadLiteRt(WASM);
+
+    log("downloading model…");
+    const man = await fetch("model/model.json").then(r=>r.json());
+    const parts = [];
+    for (const p of man.parts){
+      parts.push(new Uint8Array(await fetch("model/"+p.file).then(r=>r.arrayBuffer())));
+      log("  part "+parts.length+"/"+man.parts.length);
+    }
+    const joined = new Uint8Array(parts.reduce((n,p)=>n+p.length,0));
+    let at=0; for(const p of parts){ joined.set(p,at); at+=p.length; }
+    log("compiling…");
+    model = await L.loadAndCompile(joined, {accelerator:"wasm"});
+    log("ready\n");
+
+    const tb = document.querySelector("#tbl tbody");
+    document.getElementById("tbl").hidden = false;
+    let exact=0, genus=0, family=0, miss=0, none=0, times=[];
+
+    for (const sn of CASES){
+      const url = await photo(sn);
+      if (!url){ log(sn+": no photo available, skipped"); continue; }
+      const img = new Image(); img.crossOrigin = "anonymous"; img.src = url;
+      try{ await img.decode(); }
+      catch(e){ log(sn+": photo would not load"); continue; }
+
+      const px = frameFrom(img);
+      const t0 = performance.now();
+      const p = probsOf(model.run([L.Tensor.fromTypedArray(px,[1,299,299,3])]));
+      const ms = Math.round(performance.now()-t0);
+      times.push(ms);
+
+      const r = AGR.rollup(p);
+      const lin = TAXONOMY.lineage[sn] || [];
+      let verdict, cls;
+      if (!r.pick){ verdict = "nothing confident"; cls="bad"; none++; }
+      else if (r.pick.rank==="species" && r.pick.name===sn){ verdict = r.pick.name; cls="ok"; exact++; }
+      else if (r.pick.rank==="genus" && r.pick.name===lin[1]){ verdict = r.pick.name+" sp."; cls="near"; genus++; }
+      else if (r.pick.rank==="family" && r.pick.name===lin[2]){ verdict = r.pick.name; cls="near"; family++; }
+      else { verdict = r.pick.name+" ("+r.pick.rank+")"; cls="bad"; miss++; }
+
+      // top-3, for when the answer is wrong and the reason matters
+      const top = [...p].map((v,i)=>[v,i]).sort((a,b)=>b[0]-a[0]).slice(0,3)
+        .map(([v,i])=>`${AGR.idx[i]?AGR.idx[i].sn:"?"} ${(v*100).toFixed(1)}%`).join(", ");
+
+      const tr = document.createElement("tr");
+      tr.innerHTML = `<td><img src="${url}" alt=""></td>
+        <td>${sn}</td><td class="${cls}">${verdict}<div style="color:#6B7873;font-weight:400">${top}</div></td>
+        <td>${r.pick?r.pick.rank:"—"}</td><td>${r.pick?Math.round(r.pick.p*100)+"%":"—"}</td><td>${ms}</td>`;
+      tb.appendChild(tr);
+      log(`${sn.padEnd(26)} -> ${verdict.padEnd(30)} ${r.pick?(r.pick.rank+" "+Math.round(r.pick.p*100)+"%"):""} ${ms}ms | top3: ${top}`);
+    }
+
+    const n = exact+genus+family+miss+none;
+    times.sort((a,b)=>a-b);
+    const s = `${n} photos · <b>${exact} exact species (${Math.round(100*exact/n)}%)</b> · `+
+      `${genus} right genus · ${family} right family · ${miss} wrong · ${none} no call · `+
+      `median ${times[Math.floor(times.length/2)]} ms`;
+    document.getElementById("sum").innerHTML = s;
+    document.getElementById("sum").hidden = false;
+    log("\n"+s.replace(/<[^>]+>/g,""));
+  }catch(e){
+    log("FAILED: "+(e && e.message || e));
+  }
+  document.getElementById("go").disabled = false;
+};
+</script>
+</body>
+</html>

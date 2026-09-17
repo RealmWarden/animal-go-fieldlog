@@ -1,11 +1,15 @@
 /* Offline shell for the Animal Go field log.
    Cache-first: once installed, the app runs with no network at all. The species
    data is ~670 KB and never changes between releases, so it is cached with the
-   shell rather than fetched each launch. Bump CACHE on every deploy — the old
-   cache is deleted on activate. */
-const CACHE = "animalgo-v5";
+   shell rather than fetched each launch. The 22 MB classifier is deliberately
+   NOT in the shell — installing it would mean a 22 MB download before the app
+   first opens. It is cached by the generic same-origin rule below, the first
+   time the scanner loads it. Bump CACHE on every deploy — the old cache is
+   deleted on activate. */
+const CACHE = "animalgo-v6";
 const SHELL = [
-  "./", "./index.html", "./app.js", "./styles.css", "./manifest.webmanifest",
+  "./", "./index.html", "./app.js", "./rollup.js", "./scan.js", "./worker.js",
+  "./styles.css", "./manifest.webmanifest",
   "./data/stat_grid.json", "./data/taxonomy.json", "./data/species.json",
   "./icons/icon-192.png", "./icons/icon-512.png", "./icons/icon-180.png",
 ];
@@ -35,8 +39,13 @@ self.addEventListener("fetch", e => {
   // refresh in the background. Caching the photos is what keeps a record
   // illustrated when you are out of signal.
   const isFont = /fonts\.(googleapis|gstatic)\.com/.test(req.url);
+  // The classifier runtime, until it is vendored into the repo. jsdelivr sends
+  // permissive CORS headers, so the cached copy is a real (non-opaque) response
+  // and the worker's dynamic import of it still works with no network. This is
+  // what keeps the offline promise true while the runtime lives on a CDN.
+  const isRuntime = /cdn\.jsdelivr\.net\/npm\/@litertjs/.test(req.url);
   const isPhoto = /(thumb\.wikimedia\.org|upload\.wikimedia\.org)/.test(req.url);
-  if (isFont || isPhoto) {
+  if (isFont || isPhoto || isRuntime) {
     e.respondWith(caches.match(req).then(hit => hit || fetch(req).then(res => {
       const copy = res.clone();
       caches.open(CACHE).then(c => c.put(req, copy)).catch(() => {});
@@ -47,9 +56,10 @@ self.addEventListener("fetch", e => {
 
   if (new URL(req.url).origin !== location.origin) return;
 
-  // The benchmark page is a diagnostic: always take the network copy so a newer
-  // version is never masked by the offline cache.
-  if (/\/bench\.html$/.test(new URL(req.url).pathname)) return;
+  // The diagnostic pages always take the network copy, so a newer version is
+  // never masked by the offline cache. This has bitten once already: a cached
+  // model file hid a fixed one and looked like a model bug for an hour.
+  if (/\/(bench|scan-test)\.html$/.test(new URL(req.url).pathname)) return;
 
   e.respondWith(
     caches.match(req).then(hit => hit || fetch(req).then(res => {

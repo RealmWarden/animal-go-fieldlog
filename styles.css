@@ -267,3 +267,109 @@ h3{font-family:var(--fs-ui); font-size:11px; letter-spacing:.1em; text-transform
   border-bottom:1px solid var(--line); background:var(--surface-2)}
 .dexthumb.noimg,.dexthumb.loadimg{width:100%; height:58px}
 .dexcell.got{padding-top:0}
+
+/* ============================================================
+   Camera scanner
+   ============================================================ */
+.camwrap{
+  position:relative; width:100%; aspect-ratio:3/4; max-height:56vh;
+  margin:0 0 10px; overflow:hidden; border-radius:var(--radius);
+  background:#0B100E; border:1px solid var(--line-2);
+}
+@media (min-width:600px){ .camwrap{aspect-ratio:4/3} }
+#cam{
+  position:absolute; inset:0; width:100%; height:100%;
+  object-fit:cover; display:block;
+}
+/* The square in the middle is the part the classifier actually sees — the frame
+   is centre-cropped to square before it is scaled down, so anything outside
+   this box is not being looked at. Worth showing rather than explaining. */
+.reticle{
+  position:absolute; left:50%; top:50%; transform:translate(-50%,-50%);
+  width:min(74%, 74vw); aspect-ratio:1;
+  border:1.5px solid rgba(255,255,255,.55); border-radius:2px;
+  box-shadow:0 0 0 9999px rgba(0,0,0,.22);
+}
+.camoverlay{
+  position:absolute; inset:0; display:flex; flex-direction:column;
+  justify-content:space-between; padding:10px; pointer-events:none;
+}
+.camboot{
+  position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+  padding:0 24px; text-align:center;
+  font-family:var(--fs-ui); font-size:13px; color:rgba(255,255,255,.72);
+}
+.camwrap[data-state="live"] .camboot{display:none}
+.camwrap[data-state="fail"]{aspect-ratio:auto; max-height:none; min-height:0;
+  background:var(--surface-2); border-style:dashed}
+.camwrap[data-state="fail"] #cam,
+.camwrap[data-state="fail"] .reticle,
+.camwrap[data-state="fail"] .camoverlay{display:none}
+.camwrap[data-state="fail"] .camboot{position:static; padding:18px 16px; color:var(--ink-3)}
+
+/* the climb: insect › bees › Bombus › species */
+/* One row, always. Wrapping this across two lines put a long family name over
+   the middle of the viewfinder, which is the one thing on screen that has to
+   stay clear. Long names ellipsize instead. */
+.ladder{
+  display:flex; flex-wrap:nowrap; align-items:center; gap:4px;
+  font-family:var(--fs-ui); font-size:10.5px; letter-spacing:.02em;
+}
+.rung{
+  display:flex; align-items:baseline; gap:4px; min-width:0;
+  background:rgba(8,14,12,.58); color:rgba(255,255,255,.80);
+  padding:3px 7px; border-radius:2px; backdrop-filter:blur(3px);
+}
+.rung + .rung{position:relative; margin-left:9px}
+.rung + .rung::before{
+  content:"\203A"; position:absolute; left:-9px; top:50%; transform:translateY(-50%);
+  color:rgba(255,255,255,.55); font-size:11px; line-height:1;
+}
+.rung i{font-style:normal; min-width:0; overflow:hidden; text-overflow:ellipsis;
+  white-space:nowrap}
+/* Who gets truncated when three rungs do not fit. Equal shrink turned "bird"
+   into "b..."; shrinking the middle one first then truncated "Bumble Bees" in
+   the very state where the genus IS the answer. So: whichever rung is the
+   current answer is never shortened, the class label is short anyway, and the
+   remaining rung -- context rather than conclusion -- gives up the space. */
+.rung{flex:0 6 auto}
+.rung[data-r="class"]{flex:0 0 auto}   /* "insect" is already short */
+.rung.on{flex:0 0 auto}
+.rung b{font-family:var(--fs-num); font-weight:500; opacity:.62; flex:0 0 auto}
+.rung.on{background:var(--accent); color:#fff}
+.rung.on b{opacity:.85}
+
+/* the reference photo — the reason this screen exists */
+.idcard:empty{display:none}
+.idcard{
+  display:flex; gap:10px; align-items:center;
+  background:rgba(8,14,12,.68); backdrop-filter:blur(6px);
+  border-radius:var(--radius); padding:8px; color:#fff;
+}
+.idshot{flex:0 0 auto; width:76px; height:76px; border-radius:2px; overflow:hidden;
+  background:rgba(255,255,255,.08)}
+.idimg{width:76px; height:76px; object-fit:cover; display:block}
+.idimg.noimg{background:rgba(255,255,255,.1)}
+.idtext{min-width:0; flex:1 1 auto}
+.idsci{font-family:var(--fs-sci); font-style:italic; font-size:15.5px; line-height:1.15;
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.idcommon{font-family:var(--fs-ui); font-size:12.5px; font-weight:600; margin-top:1px;
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.idcommon:empty{display:none}
+.idbar{height:3px; border-radius:2px; background:rgba(255,255,255,.18); margin:6px 0 4px}
+.idbar i{display:block; height:100%; border-radius:2px; background:var(--accent);
+  transition:width .35s ease}
+.idmeta{font-family:var(--fs-num); font-size:10px; color:rgba(255,255,255,.62); line-height:1.35}
+
+.scanmsg{
+  font-family:var(--fs-ui); font-size:12px; color:var(--ink-2);
+  margin:0 0 10px; min-height:1.2em;
+}
+.coarse{margin:10px 0 0; padding:10px 12px; background:var(--surface-2);
+  border-radius:var(--radius)}
+.coarse .note{margin:0 0 8px}
+.linkish{
+  appearance:none; background:none; border:0; padding:6px 0; margin:6px 0 0;
+  font-family:var(--fs-ui); font-size:12px; font-weight:600; color:var(--accent);
+  text-decoration:underline; text-underline-offset:2px; cursor:pointer;
+}

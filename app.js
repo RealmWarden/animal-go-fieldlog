@@ -284,12 +284,12 @@ function imgMarkup(name, cls){
    ============================================================ */
 const INTRO_KEY="animalgo.introSeen";
 const INTRO=[
- {t:"This stands in for a camera",
-  b:"The finished app identifies animals through your phone's camera. That part isn't built yet — so for now you <b>pick the animal from a list</b>, as if you'd just spotted one."},
- {t:"Recording an animal",
-  b:"Say how good a look you got, then tap <b>Scan &amp; record</b>. You get that one specific individual: its weight, how big it is for its species, and its stats. Record the same species twice and you get two different animals."},
- {t:"Sometimes it can't tell",
-  b:"A poor view may only narrow it to a genus — <b>Bombus sp.</b>, one of seven bumblebees. That's still a real record, it just doesn't fill a dex slot yet. <b>Observe longer</b> tries to pin it down, but the animal may leave first."},
+ {t:"Point your camera at an animal",
+  b:"Hold it in frame. The classifier runs on your phone, several times a second, and narrows down what it is as it watches — <b>insect → bees → Bombus → the species</b>. Nothing is uploaded anywhere."},
+ {t:"Hold until it names a species",
+  b:"The readout climbs while you hold steady. <b>Record</b> unlocks once it settles on one species for a few frames running. If it can only reach a genus, it will say so — some genera the model genuinely cannot split."},
+ {t:"You get that one individual",
+  b:"Recording gives you that specific animal: its weight, how big it is for its species, and its stats. Record the same species twice and you get two different animals. The picture is from Wikipedia, so you can see what you found without getting closer."},
  {t:"Your collection",
   b:"<b>Collection</b> lists everything you've recorded — star up to six as your active squad, and only those gain experience when you walk. <b>Dex</b> tracks how many of the 296 species you've found. The records already in there are examples; Clear all removes them."},
 ];
@@ -357,8 +357,7 @@ function addHints(){
     const p=document.createElement("p"); p.className="hint"; p.textContent=text;
     el.insertAdjacentElement("afterend",p);
   };
-  put("#species","Stands in for the camera — pick what you spotted.");
-  put("#viewseg","How good a look you got. A worse view means a vaguer identification.");
+  put("#viewseg","Only used by the fallback list. A worse view means a vaguer identification.");
   put(".seg[role=group]:not(#viewseg)","Pets and zoo animals are collected but don't count toward the dex.");
 }
 
@@ -641,6 +640,11 @@ async function loadData(){
   await initStore();
   renderAll();
   maybeShowIntro();
+  // The scanner owns the camera, the worker and the Record button. It is started
+  // after the UI is up so a camera prompt never blocks the app from rendering.
+  try{ await initScanner(); }
+  catch(e){ document.getElementById("scanmsg").textContent =
+    "The scanner couldn't start. Use the species list below."; }
 
   if("serviceWorker" in navigator){
     try{ await navigator.serviceWorker.register("sw.js"); }catch(e){}
