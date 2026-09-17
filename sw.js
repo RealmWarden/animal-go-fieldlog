@@ -3,7 +3,7 @@
    data is ~670 KB and never changes between releases, so it is cached with the
    shell rather than fetched each launch. Bump CACHE on every deploy — the old
    cache is deleted on activate. */
-const CACHE = "animalgo-v3";
+const CACHE = "animalgo-v4";
 const SHELL = [
   "./", "./index.html", "./app.js", "./styles.css", "./manifest.webmanifest",
   "./data/stat_grid.json", "./data/taxonomy.json", "./data/species.json",
