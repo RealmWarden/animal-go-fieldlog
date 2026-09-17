@@ -373,3 +373,10 @@ h3{font-family:var(--fs-ui); font-size:11px; letter-spacing:.1em; text-transform
   font-family:var(--fs-ui); font-size:12px; font-weight:600; color:var(--accent);
   text-decoration:underline; text-underline-offset:2px; cursor:pointer;
 }
+
+/* A leading candidate that has not cleared the threshold. Same card, visibly
+   provisional — it is information, not an identification. */
+.idcard[data-state="maybe"]{background:rgba(8,14,12,.5)}
+.idcard[data-state="maybe"] .idsci{font-style:italic; opacity:.8}
+.idcard[data-state="maybe"] .idshot{opacity:.62}
+.idcard[data-state="maybe"] .idbar i{background:rgba(255,255,255,.45)}

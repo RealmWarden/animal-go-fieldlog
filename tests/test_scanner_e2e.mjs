@@ -15,7 +15,15 @@ import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
 import { createRequire } from "node:module";
-const { chromium } = createRequire(import.meta.url)("/home/claude/.npm-global/lib/node_modules/playwright/index.js");
+// Playwright may be installed globally rather than beside this file, which a
+// bare `import "playwright"` will not find. Try the normal resolution first.
+const require_ = createRequire(import.meta.url);
+let chromium;
+for (const where of ["playwright", "playwright-core",
+                     "/home/claude/.npm-global/lib/node_modules/playwright/index.js"]){
+  try{ ({chromium} = require_(where)); break; }catch(e){}
+}
+if (!chromium){ console.error("playwright not found — npm i -D playwright"); process.exit(2); }
 
 const ROOT = path.resolve(import.meta.dirname, "..", "pwa");
 const TAXONOMY = JSON.parse(fs.readFileSync(path.join(ROOT,"data/taxonomy.json"),"utf8"));

@@ -204,11 +204,35 @@ function paint(){
   }
 
   if (!b){
-    msg.textContent = S.frames < 2 ? "Looking…" : "Keep it in frame — nothing recognised yet.";
-    card.innerHTML = ""; btn.disabled = true; btn.textContent = "Record";
+    // Below the bar is not the same as blank. Measured against real photographs,
+    // the near misses were all cases where the RIGHT species led at 45-53% —
+    // a honey bee at 47%, a fence lizard at 53%. Reporting those as "nothing
+    // recognised" is both discouraging and untrue, and it hides the one piece of
+    // information that tells you to keep holding rather than give up. So the
+    // leader is shown, dimmed, and explicitly not recordable.
+    const lead = r && (r.sp && r.sp.p >= 0.20 ? r.sp : (r.ge && r.ge.p >= 0.25 ? r.ge : null));
+    if (lead){
+      const nm = AGR.niceName(lead.name);
+      msg.textContent = `Leaning ${nm} — not sure enough yet. Keep holding.`;
+      ensureImage(lead.name, ()=>{ if (!S.best) paint(); });
+      card.innerHTML = `
+        <div class="idshot">${imgMarkup(lead.name,"idimg")}</div>
+        <div class="idtext">
+          <div class="idsci">${lead.name}</div>
+          <div class="idcommon">${nm !== lead.name ? nm : ""}</div>
+          <div class="idbar"><i style="width:${Math.round(lead.p*100)}%"></i></div>
+          <div class="idmeta">possible · ${Math.round(lead.p*100)}% — below the threshold to record</div>
+        </div>`;
+      card.dataset.state = "maybe";
+    } else {
+      msg.textContent = S.frames < 2 ? "Looking…" : "Keep it in frame — nothing recognised yet.";
+      card.innerHTML = ""; card.removeAttribute("data-state");
+    }
+    btn.disabled = true; btn.textContent = "Record";
     el("coarse").hidden = true;
     return;
   }
+  card.removeAttribute("data-state");
 
   const tpl = TX[b.name];
   const sci = b.rank === "genus" ? b.name + " sp." : b.name;
