@@ -1,8 +1,10 @@
 {
-  "note": "The classifier is split because the file-transfer step caps at 20MB. app.js fetches the parts and concatenates them before handing the buffer to the tflite runtime.",
-  "model": "INatVision_Small_2_fact256_8bit.tflite",
+  "note": "Split because the file-transfer step caps at 20MB. app.js fetches the parts and concatenates them.",
+  "patched": "Dynamic batch dimensions (-1) were rewritten to their concrete values in 107 tensors. LiteRT.js refuses a concrete input buffer against a dynamic shape signature, so the batch is now static at 1. Values were edited in place; no offsets moved.",
+  "source": "INatVision_Small_2_fact256_8bit.tflite from inaturalist/model-files release v25.01.15",
   "totalBytes": 22197168,
-  "sha256": "eae277b24efa629b998d5f9c091da0576162cb1aad498786087acd001dc86d2c",
+  "sha256": "0dbf4aeb209532c9efc36931c9b0063300e5290094fb28af13694a8970723cc6",
+  "runtime": "@litertjs/core (tfjs-tflite is too old: its bundled interpreter aborts on this 2.15-converted model)",
   "input": {
     "shape": [
       1,
