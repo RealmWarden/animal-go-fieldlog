@@ -146,24 +146,38 @@ document.getElementById("go1").onclick = async () => {
 };
 
 /* ---------- 2. a real ViT ------------------------------------------------ */
+/* Two sizes on purpose. The small one is there so the trip is never wasted: if
+   ViT-B/16 will not load at all, a working number from a smaller transformer
+   still says what this phone's GPU does with this kind of arithmetic, and the
+   two together give a slope rather than a point. */
 const CANDIDATES = [
-  {repo:"Xenova/clip-vit-base-patch16", kind:"clip"},
-  {repo:"Xenova/vit-base-patch16-224",  kind:"vit"},
+  {repo:"Xenova/clip-vit-base-patch16", kind:"clip", note:"ViT-B/16 — the target size"},
+  {repo:"Xenova/vit-base-patch16-224",  kind:"vit",  note:"ViT-B/16, plain classifier"},
+  {repo:"Xenova/mobilevit-small",       kind:"vit",  note:"small, as a floor"},
 ];
 const COMBOS = [
   {device:"webgpu", dtype:"fp16"},
   {device:"webgpu", dtype:"fp32"},
+  {device:"webgpu", dtype:"q8"},
   {device:"wasm",   dtype:"q8"},
+  {device:"wasm",   dtype:"fp32"},
 ];
 
 async function timeModel(T, repo, kind, device, dtype){
   const out = {repo, device, dtype};
   try{
     const t0 = performance.now();
-    const model = kind === "clip"
-      ? await T.CLIPVisionModelWithProjection.from_pretrained(repo, {device, dtype})
-      : await T.AutoModel.from_pretrained(repo, {device, dtype});
-    const processor = await T.AutoProcessor.from_pretrained(repo);
+    let lastPct = -10;
+    const progress_callback = p => {
+      if (p.status !== "progress" || !p.progress) return;
+      const pct = Math.floor(p.progress/10)*10;
+      if (pct > lastPct){ lastPct = pct; log(`    downloading ${p.file||""} ${pct}%`); }
+    };
+    const opts = {device, dtype, progress_callback};
+    const Cls = (kind === "clip" && T.CLIPVisionModelWithProjection)
+              ? T.CLIPVisionModelWithProjection : T.AutoModel;
+    const model = await Cls.from_pretrained(repo, opts);
+    const processor = await T.AutoProcessor.from_pretrained(repo, {progress_callback});
     out.loadMs = Math.round(performance.now()-t0);
 
     // a synthetic image, so nothing depends on the network twice
@@ -190,29 +204,42 @@ document.getElementById("go2").onclick = async () => {
   const btn=document.getElementById("go2"); btn.disabled=true;
   try{
     log("\nloading transformers.js…");
-    const T = await import("https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.7.5");
-    T.env.allowLocalModels = false;
-    log("  ok");
+    // A pinned patch version that has been unpublished or never existed 404s and
+    // takes the whole page with it, so try a few specifiers.
+    let T = null, from = null;
+    for (const u of ["https://cdn.jsdelivr.net/npm/@huggingface/transformers@3",
+                     "https://cdn.jsdelivr.net/npm/@huggingface/transformers",
+                     "https://cdn.jsdelivr.net/npm/@xenova/transformers@2"]){
+      try{ T = await import(u); from = u; break; }
+      catch(e){ log("  " + u.split("/npm/")[1] + " — " + String(e.message||e).slice(0,70)); }
+    }
+    if (!T) throw new Error("could not load transformers.js from any CDN path");
+    R.transformers = from;
+    if (T.env) T.env.allowLocalModels = false;
+    log("  loaded " + from.split("/npm/")[1]);
     R.vit = [];
-    outer:
     for (const c of CANDIDATES){
+      log(`\n${c.repo} (${c.note})`);
       for (const m of COMBOS){
         log(`trying ${c.repo} on ${m.device}/${m.dtype}…`);
         const r = await timeModel(T, c.repo, c.kind, m.device, m.dtype);
         R.vit.push(r);
         log("  " + (r.error ? "failed: "+r.error : `${r.medianMs} ms  (load ${r.loadMs} ms)`));
-        // one success on each device is enough
-        if (R.vit.filter(x=>!x.error && x.device==="webgpu").length &&
-            R.vit.filter(x=>!x.error && x.device==="wasm").length) break outer;
+        // one good number per backend for this model is enough; move on
+        const ok = R.vit.filter(x=>!x.error && x.repo===c.repo);
+        if (ok.some(x=>x.device==="webgpu") && ok.some(x=>x.device==="wasm")) break;
       }
     }
-    const g = R.vit.find(x=>!x.error && x.device==="webgpu");
-    const w = R.vit.find(x=>!x.error && x.device==="wasm");
+    // report the biggest model that actually ran
+    const ran = R.vit.filter(x=>!x.error);
+    const best = CANDIDATES.map(c=>c.repo).find(r=>ran.some(x=>x.repo===r));
+    const g = ran.find(x=>x.repo===best && x.device==="webgpu");
+    const w = ran.find(x=>x.repo===best && x.device==="wasm");
     let v;
     if (g && w) v = `<span class="big">${g.medianMs} ms</span> on the GPU, ${w.medianMs} ms on the CPU. ` +
-                    `The scanner's budget is about 570 ms a frame.`;
-    else if (g)  v = `<span class="big">${g.medianMs} ms</span> on the GPU. The CPU path did not run.`;
-    else if (w)  v = `Only the CPU ran it: <span class="big">${w.medianMs} ms</span>.`;
+                    `The scanner's budget is 572 ms a frame. (${best})`;
+    else if (g)  v = `<span class="big">${g.medianMs} ms</span> on the GPU (${best}). The CPU path did not run.`;
+    else if (w)  v = `Only the CPU ran it: <span class="big">${w.medianMs} ms</span> (${best}).`;
     else         v = "Neither backend could run it — see the log.";
     document.getElementById("v2").innerHTML = v;
     log("\n" + v.replace(/<[^>]+>/g,""));
