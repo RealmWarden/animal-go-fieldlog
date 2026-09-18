@@ -71,12 +71,22 @@ async function benchOne(L, bytes, accelerator, frame){
   return out;
 }
 
+// LiteRT can only be loaded once per page, so a second click used to fail with
+// "LiteRT is already loading / loaded" and hide whatever the real result was.
+let runtime = null;
+const getRuntime = async () => {
+  if (runtime) return runtime;
+  const L = await import("https://cdn.jsdelivr.net/npm/@litertjs/core@2.5.3/+esm");
+  await L.loadLiteRt("https://cdn.jsdelivr.net/npm/@litertjs/core@2.5.3/wasm/");
+  runtime = L;
+  return L;
+};
+
 document.getElementById("go").onclick = async () => {
   document.getElementById("go").disabled = true;
   try{
     log("loading runtime…");
-    const L = await import("https://cdn.jsdelivr.net/npm/@litertjs/core@2.5.3/+esm");
-    await L.loadLiteRt("https://cdn.jsdelivr.net/npm/@litertjs/core@2.5.3/wasm/");
+    const L = await getRuntime();
 
     R.webgpuInBrowser = !!navigator.gpu;
     try{ R.webgpuInLiteRt = await L.isWebGPUSupported?.(); }catch(e){ R.webgpuInLiteRt = "threw"; }

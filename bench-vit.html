@@ -1,0 +1,225 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Animal Go — can this phone run a big model?</title>
+<style>
+ body{font:14px/1.55 system-ui,sans-serif;margin:0;padding:16px;max-width:780px;color:#141C18;background:#fff}
+ h1{font-size:17px;margin:0 0 4px}
+ h2{font-size:14px;margin:18px 0 6px}
+ p.note{color:#6B7873;font-size:12.5px;margin:0 0 12px}
+ button{font:inherit;font-weight:600;padding:11px 18px;border:1px solid #13575E;background:#13575E;
+        color:#fff;border-radius:3px;cursor:pointer;margin-right:8px}
+ button.alt{background:#fff;color:#13575E}
+ button[disabled]{opacity:.5}
+ #log{white-space:pre-wrap;font:11.5px/1.6 ui-monospace,monospace;margin-top:14px;background:#F3F5F2;
+      border:1px solid #E0E5DE;border-radius:3px;padding:10px}
+ .verdict{margin-top:14px;padding:12px;border-radius:3px;background:#E9F1F1;font-size:14px}
+ .verdict:empty{display:none}
+ .big{font-size:20px;font-weight:700}
+</style>
+</head>
+<body>
+<h1>Can this phone run a big model?</h1>
+<p class="note">The roster is 296 animals because that is all the small classifier knows. A far bigger one
+exists — a CLIP-style model that lets the species list be chosen rather than baked in — but it is about
+ten times the arithmetic. Whether that fits depends on the GPU, which the scanner is not using. These two
+tests measure it. Run the first one; it is quick and needs no download.</p>
+
+<h2>1. Raw GPU throughput</h2>
+<p class="note">A plain matrix multiply on the GPU, and the same one on the CPU, with nothing else
+involved. Answers "is the GPU worth targeting at all". A few seconds, no download.</p>
+<button id="go1">Measure the GPU</button>
+<div class="verdict" id="v1"></div>
+
+<h2>2. A real vision transformer</h2>
+<p class="note">Downloads CLIP ViT-B/16 — the same architecture and size as the biological model worth
+moving to — and times one image through it on the GPU and on the CPU. <b>About 90 MB, so do this on
+wifi.</b> This is the number that decides the question.</p>
+<button id="go2" class="alt">Measure ViT-B/16</button>
+<div class="verdict" id="v2"></div>
+
+<div id="log">idle</div>
+
+<script type="module">
+const R = {ua: navigator.userAgent, cores: navigator.hardwareConcurrency||null, gpu: !!navigator.gpu};
+const log = m => { const l=document.getElementById("log");
+                   l.textContent = (l.textContent==="idle"?"":l.textContent+"\n")+m; };
+const med = a => { const s=[...a].sort((x,y)=>x-y); return s[Math.floor(s.length/2)]; };
+
+/* ---------- 1. raw throughput ------------------------------------------- */
+const N = 512;                       // 512^3 multiply-adds x2 flops
+const FLOPS = 2 * N * N * N;
+
+async function gpuMatmul(){
+  if (!navigator.gpu) throw new Error("no navigator.gpu");
+  const adapter = await navigator.gpu.requestAdapter();
+  if (!adapter) throw new Error("no GPU adapter");
+  const dev = await adapter.requestDevice();
+  R.gpuLimits = {maxBufferSize: dev.limits.maxBufferSize,
+                 maxComputeWorkgroupsPerDimension: dev.limits.maxComputeWorkgroupsPerDimension};
+
+  const code = `
+@group(0) @binding(0) var<storage, read> A : array<f32>;
+@group(0) @binding(1) var<storage, read> B : array<f32>;
+@group(0) @binding(2) var<storage, read_write> C : array<f32>;
+const N : u32 = ${N}u;
+@compute @workgroup_size(16, 16)
+fn main(@builtin(global_invocation_id) gid : vec3<u32>) {
+  let row = gid.y; let col = gid.x;
+  if (row >= N || col >= N) { return; }
+  var acc : f32 = 0.0;
+  for (var k : u32 = 0u; k < N; k = k + 1u) {
+    acc = acc + A[row * N + k] * B[k * N + col];
+  }
+  C[row * N + col] = acc;
+}`;
+  const mod = dev.createShaderModule({code});
+  const pipe = dev.createComputePipeline({layout:"auto", compute:{module:mod, entryPoint:"main"}});
+
+  const bytes = N*N*4;
+  const mk = usage => dev.createBuffer({size:bytes, usage});
+  const U = GPUBufferUsage;
+  const a = mk(U.STORAGE|U.COPY_DST), b = mk(U.STORAGE|U.COPY_DST), c = mk(U.STORAGE|U.COPY_SRC);
+  const data = new Float32Array(N*N);
+  for (let i=0;i<data.length;i++) data[i] = (i % 7) * 0.13;
+  dev.queue.writeBuffer(a, 0, data); dev.queue.writeBuffer(b, 0, data);
+
+  const bind = dev.createBindGroup({layout: pipe.getBindGroupLayout(0), entries:[
+    {binding:0, resource:{buffer:a}}, {binding:1, resource:{buffer:b}}, {binding:2, resource:{buffer:c}}]});
+
+  const once = async () => {
+    const enc = dev.createCommandEncoder();
+    const pass = enc.beginComputePass();
+    pass.setPipeline(pipe); pass.setBindGroup(0, bind);
+    pass.dispatchWorkgroups(Math.ceil(N/16), Math.ceil(N/16));
+    pass.end();
+    dev.queue.submit([enc.finish()]);
+    await dev.queue.onSubmittedWorkDone();
+  };
+  await once();                                   // warm up / compile
+  const t=[]; for (let i=0;i<5;i++){ const s=performance.now(); await once(); t.push(performance.now()-s); }
+  return med(t);
+}
+
+function cpuMatmul(){
+  const A=new Float32Array(N*N), B=new Float32Array(N*N), C=new Float32Array(N*N);
+  for (let i=0;i<A.length;i++){ A[i]=(i%7)*0.13; B[i]=A[i]; }
+  const once = () => {
+    for (let i=0;i<N;i++){
+      const iN=i*N;
+      for (let k=0;k<N;k++){
+        const aik=A[iN+k], kN=k*N;
+        for (let j=0;j<N;j++) C[iN+j]+=aik*B[kN+j];
+      }
+    }
+  };
+  once();
+  const t=[]; for (let i=0;i<3;i++){ const s=performance.now(); once(); t.push(performance.now()-s); }
+  return med(t);
+}
+
+document.getElementById("go1").onclick = async () => {
+  const btn=document.getElementById("go1"); btn.disabled=true;
+  try{
+    log("GPU matmul…");
+    let g=null; try{ g = await gpuMatmul(); }catch(e){ R.gpuError=String(e.message||e); log("  GPU failed: "+R.gpuError); }
+    log("CPU matmul (this one is slow on purpose)…");
+    const c = cpuMatmul();
+    R.matmul = {n:N, gpuMs: g===null?null:Math.round(g*100)/100, cpuMs: Math.round(c)};
+    if (g){
+      R.matmul.gpuGflops = Math.round(FLOPS/(g/1000)/1e9*10)/10;
+      R.matmul.cpuGflops = Math.round(FLOPS/(c/1000)/1e9*10)/10;
+      R.matmul.speedup = Math.round((c/g)*10)/10;
+      document.getElementById("v1").innerHTML =
+        `<span class="big">${R.matmul.speedup}× faster</span> on the GPU — ` +
+        `${R.matmul.gpuGflops} GFLOP/s vs ${R.matmul.cpuGflops} GFLOP/s on the CPU.` +
+        (R.matmul.speedup >= 5 ? "<br>Worth targeting." :
+         "<br>Not the free lunch it looked like; a naive kernel may be the limit rather than the hardware.");
+    } else {
+      document.getElementById("v1").textContent = "WebGPU could not run at all here.";
+    }
+    log("\n" + JSON.stringify(R.matmul));
+  }catch(e){ log("FAILED: "+(e.message||e)); }
+  btn.disabled=false;
+};
+
+/* ---------- 2. a real ViT ------------------------------------------------ */
+const CANDIDATES = [
+  {repo:"Xenova/clip-vit-base-patch16", kind:"clip"},
+  {repo:"Xenova/vit-base-patch16-224",  kind:"vit"},
+];
+const COMBOS = [
+  {device:"webgpu", dtype:"fp16"},
+  {device:"webgpu", dtype:"fp32"},
+  {device:"wasm",   dtype:"q8"},
+];
+
+async function timeModel(T, repo, kind, device, dtype){
+  const out = {repo, device, dtype};
+  try{
+    const t0 = performance.now();
+    const model = kind === "clip"
+      ? await T.CLIPVisionModelWithProjection.from_pretrained(repo, {device, dtype})
+      : await T.AutoModel.from_pretrained(repo, {device, dtype});
+    const processor = await T.AutoProcessor.from_pretrained(repo);
+    out.loadMs = Math.round(performance.now()-t0);
+
+    // a synthetic image, so nothing depends on the network twice
+    const cv = document.createElement("canvas"); cv.width=cv.height=224;
+    const ctx = cv.getContext("2d");
+    const img = ctx.createImageData(224,224);
+    for (let i=0;i<img.data.length;i+=4){
+      img.data[i]=(i/4)%255; img.data[i+1]=((i/4)*7)%255; img.data[i+2]=((i/4)*13)%255; img.data[i+3]=255;
+    }
+    ctx.putImageData(img,0,0);
+    const raw = typeof T.RawImage.fromCanvas === "function"
+              ? await T.RawImage.fromCanvas(cv)
+              : await T.RawImage.fromURL(cv.toDataURL());
+    const inputs = await processor(raw);
+
+    await model(inputs);                                   // warm up
+    const t=[]; for (let i=0;i<4;i++){ const s=performance.now(); await model(inputs); t.push(performance.now()-s); }
+    out.medianMs = Math.round(med(t)); out.times = t.map(x=>Math.round(x));
+  }catch(e){ out.error = String(e && e.message || e).slice(0,180); }
+  return out;
+}
+
+document.getElementById("go2").onclick = async () => {
+  const btn=document.getElementById("go2"); btn.disabled=true;
+  try{
+    log("\nloading transformers.js…");
+    const T = await import("https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.7.5");
+    T.env.allowLocalModels = false;
+    log("  ok");
+    R.vit = [];
+    outer:
+    for (const c of CANDIDATES){
+      for (const m of COMBOS){
+        log(`trying ${c.repo} on ${m.device}/${m.dtype}…`);
+        const r = await timeModel(T, c.repo, c.kind, m.device, m.dtype);
+        R.vit.push(r);
+        log("  " + (r.error ? "failed: "+r.error : `${r.medianMs} ms  (load ${r.loadMs} ms)`));
+        // one success on each device is enough
+        if (R.vit.filter(x=>!x.error && x.device==="webgpu").length &&
+            R.vit.filter(x=>!x.error && x.device==="wasm").length) break outer;
+      }
+    }
+    const g = R.vit.find(x=>!x.error && x.device==="webgpu");
+    const w = R.vit.find(x=>!x.error && x.device==="wasm");
+    let v;
+    if (g && w) v = `<span class="big">${g.medianMs} ms</span> on the GPU, ${w.medianMs} ms on the CPU. ` +
+                    `The scanner's budget is about 570 ms a frame.`;
+    else if (g)  v = `<span class="big">${g.medianMs} ms</span> on the GPU. The CPU path did not run.`;
+    else if (w)  v = `Only the CPU ran it: <span class="big">${w.medianMs} ms</span>.`;
+    else         v = "Neither backend could run it — see the log.";
+    document.getElementById("v2").innerHTML = v;
+    log("\n" + v.replace(/<[^>]+>/g,""));
+    log("\n--- copy everything below ---\n" + JSON.stringify(R));
+  }catch(e){ log("FAILED: "+(e.message||e)); }
+  btn.disabled=false;
+};
+</script>
+</body>
+</html>
