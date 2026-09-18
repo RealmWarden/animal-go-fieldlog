@@ -22,7 +22,7 @@
                          the scanner loads it.
 
    Bump CACHE on every deploy; the old cache is deleted on activate. */
-const CACHE = "animalgo-v12";
+const CACHE = "animalgo-v13";
 
 const SHELL = [
   "./", "./index.html", "./app.js", "./place.js", "./walk.js", "./rollup.js", "./engine.js", "./scan.js",
@@ -86,7 +86,7 @@ self.addEventListener("fetch", e => {
   }
 
   // The diagnostics are never cached at all, so a newer one cannot be masked.
-  if (/\/(bench|scan-test)\.html$/.test(url.pathname)) return;
+  if (/\/(bench[\w-]*|scan-test)\.html$/.test(url.pathname)) return;
 
   // Everything else — the app itself. Network first.
   e.respondWith(

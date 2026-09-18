@@ -31,42 +31,64 @@ below 5 m is not movement, a fix vaguer than 50 m cannot measure a step, and a
 day is capped at 60 km. There is nothing to inflate — the number is a lower
 bound on a measured displacement.
 
-## 2. Optional: let Health top it up (one-time setup, ~5 minutes)
+## 2. Let Health do it properly (one-time setup, ~5 minutes)
 
-Your iPhone has been counting **Walking + Running Distance** all day with its own
-always-on hardware, whatever any app is doing. An iOS Shortcut can hand that
-figure to the app, which then uses whichever is larger — tracked or reported —
-for the day. It never double-counts: the same figure twice is one credit, a
-smaller figure is ignored, a larger one tops up by the difference.
+**This is the better number, and once it is set up it is the one the app uses.**
+Your iPhone counts **Walking + Running Distance** all day with its own always-on
+motion hardware, whatever any app is doing. It is more accurate than a chain of
+GPS fixes and it does not care whether the app was open.
+
+The reason it is not simply the default is narrow and absolute: **a web app
+cannot read Health.** There is no web API for HealthKit, at any permission
+level, so there is nothing for the app to default *to* until you build the
+bridge once. After that the app takes whichever figure is larger for the day,
+which is almost always Health.
 
 **Build the Shortcut**
 
 1. Shortcuts → **+** → search **Find Health Samples**.
-2. Set it to **Walking + Running Distance**, sort by **Start Date**, and limit
-   the range to **Today**.
-3. Add **Calculate Statistics** → **Sum** over those samples. (The result is in
-   your Health units — kilometres or miles.)
+2. Set it to **Walking + Running Distance**, and limit the range to **Today**.
+3. Add **Calculate Statistics** → **Sum** over those samples. The result is in
+   your Health units — kilometres or miles.
 4. Add **Text**, and put this in it, inserting the sum where marked:
 
    ```
    https://realmwarden.github.io/animal-go-fieldlog/?km=[Sum]
    ```
 
-   If your Health app is set to miles, use `?m=` with the sum multiplied by
-   1609 instead — the app reads `km` as kilometres and `m` as metres.
+   If Health is set to miles, multiply the sum by 1609 and use `?m=` instead:
+   the app reads `km` as kilometres and `m` as metres.
 5. Add **Open URLs** with that text.
 6. Name it something like *Log my walking*.
 
-**Make it run by itself**
+**Make it run by itself — use Arrive, not Time of Day**
 
-Shortcuts → **Automation** → **+** → **Time of Day** → pick a time you are
-usually not mid-something (late evening works). Choose the Shortcut, and turn
-**Run Immediately** on so it does not ask. It will open the app for a moment
-once a day and the distance will be there.
+Shortcuts → **Automation** → **+** → **Arrive** → your home address → turn
+**Run Immediately** on.
 
-If you would rather it never interrupt you, skip the automation and just run the
-Shortcut from the Home Screen or the Share Sheet whenever you feel like it —
-it is idempotent, so running it ten times in a day costs nothing.
+Arrive is the right trigger for three reasons: it fires right after a walk
+rather than at an arbitrary hour, it never interrupts you mid-something, and a
+Time of Day automation can be delayed or skipped entirely if the phone has not
+been unlocked. Several arrivals in a day cost nothing — the app takes a maximum,
+not a sum, so the same figure twice is one credit and a larger one later just
+tops up the difference.
+
+You can add a late-evening **Time of Day** automation as well if you want a
+backstop for days you never leave or never come home.
+
+## What each source is good for
+
+| | tracked by the app | reported by Health |
+|---|---|---|
+| setup | none | one Shortcut, once |
+| accuracy | a lower bound, sometimes well under | the real figure |
+| counts indoor walking, treadmills | no | yes |
+| knows *where* you walked | yes — feeds the locality dex | no, it is a day total |
+| works with the phone locked | yes, as a straight line | yes |
+
+They are not redundant. Health gives the honest distance; the GPS track is what
+will eventually place a walk on a map and fill a regional dex, which a daily
+total can never do.
 
 ## Why not a server
 

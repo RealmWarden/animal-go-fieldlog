@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Animal Go — WebGPU vs WASM</title>
+<style>
+ body{font:14px/1.55 system-ui,sans-serif;margin:0;padding:16px;max-width:760px;color:#141C18;background:#fff}
+ h1{font-size:17px;margin:0 0 4px}
+ p.note{color:#6B7873;font-size:12.5px;margin:0 0 14px}
+ button{font:inherit;font-weight:600;padding:11px 18px;border:1px solid #13575E;background:#13575E;
+        color:#fff;border-radius:3px;cursor:pointer}
+ button[disabled]{opacity:.5}
+ #log{white-space:pre-wrap;font:11.5px/1.6 ui-monospace,monospace;margin-top:14px;background:#F3F5F2;
+      border:1px solid #E0E5DE;border-radius:3px;padding:10px}
+ #verdict{margin-top:14px;padding:12px;border-radius:3px;background:#E9F1F1;font-size:14px}
+ #verdict:empty{display:none}
+ .big{font-size:20px;font-weight:700}
+</style>
+</head>
+<body>
+<h1>WebGPU vs WASM</h1>
+<p class="note">The scanner runs the classifier on the CPU through WebAssembly, at about 1.17 s a frame
+on this phone. Your phone reports WebGPU as available. If the GPU path is several times faster, a much
+larger model becomes possible — which is the whole question behind the size of the roster. This measures
+it. Takes about a minute and downloads the 22 MB model once.</p>
+<button id="go">Measure both</button>
+<div id="verdict"></div>
+<div id="log">idle</div>
+
+<script>
+const log = m => { const l=document.getElementById("log");
+                   l.textContent = (l.textContent==="idle"?"":l.textContent+"\n")+m; };
+const R = {ua: navigator.userAgent, cores: navigator.hardwareConcurrency||null};
+
+async function probs(out){
+  let r = out; if (r && r.then) r = await r;
+  let f = Array.isArray(r) ? r[0]
+        : (r && typeof r==="object" && !(r instanceof Float32Array) ? r[Object.keys(r)[0]] : r);
+  if (f && typeof f.toTypedArray === "function") f = await f.toTypedArray();
+  return f instanceof Float32Array ? f : Float32Array.from(f||[]);
+}
+
+async function benchOne(L, bytes, accelerator, frame){
+  const out = {accelerator};
+  try{
+    let t0 = performance.now();
+    const model = await L.loadAndCompile(bytes, {accelerator});
+    out.compileMs = Math.round(performance.now()-t0);
+
+    t0 = performance.now();
+    const first = await probs(model.run([L.Tensor.fromTypedArray(frame,[1,299,299,3])]));
+    out.firstMs = Math.round(performance.now()-t0);
+    out.outputLen = first.length;
+    // top index, so the two backends can be compared for agreement rather than
+    // just for speed — a fast wrong answer is not a faster model
+    let bi=0; for(let i=1;i<first.length;i++) if(first[i]>first[bi]) bi=i;
+    out.top = bi; out.topP = Math.round(first[bi]*1000)/1000;
+
+    const times=[];
+    for(let i=0;i<6;i++){
+      const s=performance.now();
+      await probs(model.run([L.Tensor.fromTypedArray(frame,[1,299,299,3])]));
+      times.push(Math.round(performance.now()-s));
+      log(`    run ${i+1}: ${times[i]} ms`);
+    }
+    times.sort((a,b)=>a-b);
+    out.medianMs = times[3]; out.minMs = times[0]; out.maxMs = times[times.length-1];
+    out.times = times;
+  }catch(e){ out.error = String(e && e.message || e).slice(0,200); }
+  return out;
+}
+
+document.getElementById("go").onclick = async () => {
+  document.getElementById("go").disabled = true;
+  try{
+    log("loading runtime…");
+    const L = await import("https://cdn.jsdelivr.net/npm/@litertjs/core@2.5.3/+esm");
+    await L.loadLiteRt("https://cdn.jsdelivr.net/npm/@litertjs/core@2.5.3/wasm/");
+
+    R.webgpuInBrowser = !!navigator.gpu;
+    try{ R.webgpuInLiteRt = await L.isWebGPUSupported?.(); }catch(e){ R.webgpuInLiteRt = "threw"; }
+    log(`navigator.gpu: ${R.webgpuInBrowser} · LiteRT says WebGPU: ${R.webgpuInLiteRt}`);
+
+    log("downloading model…");
+    const man = await fetch("model/model.json").then(r=>r.json());
+    const parts=[];
+    for (const p of man.parts){
+      parts.push(new Uint8Array(await fetch("model/"+p.file).then(r=>r.arrayBuffer())));
+      log("  part "+parts.length+"/"+man.parts.length);
+    }
+    const bytes = new Uint8Array(parts.reduce((n,p)=>n+p.length,0));
+    let at=0; for(const p of parts){ bytes.set(p,at); at+=p.length; }
+
+    // a fixed synthetic frame, so both backends see identical input
+    const frame = new Float32Array(299*299*3);
+    for (let i=0;i<frame.length;i++) frame[i] = (i*37) % 255;
+
+    log("\nWASM:");
+    R.wasm = await benchOne(L, bytes, "wasm", frame);
+    if (R.wasm.error) log("  failed: "+R.wasm.error);
+
+    log("\nWebGPU:");
+    if (R.webgpuInBrowser){
+      try{
+        const adapter = await navigator.gpu.requestAdapter();
+        const device = await adapter.requestDevice();
+        if (L.setWebGpuDevice) L.setWebGpuDevice(device);
+        log("  got a GPU device");
+      }catch(e){ log("  could not get a GPU device: "+(e.message||e)); }
+      R.webgpu = await benchOne(L, bytes, "webgpu", frame);
+      if (R.webgpu.error) log("  failed: "+R.webgpu.error);
+    } else {
+      R.webgpu = {error:"navigator.gpu missing"};
+      log("  no WebGPU in this browser");
+    }
+
+    const w = R.wasm.medianMs, g = R.webgpu.medianMs;
+    let verdict;
+    if (!g) verdict = `WebGPU did not run. WASM stays at <b>${w} ms</b> a frame.`;
+    else {
+      const x = (w/g);
+      R.speedup = Math.round(x*100)/100;
+      R.agree = R.wasm.top === R.webgpu.top;
+      verdict = `<span class="big">${g} ms</span> on the GPU vs <b>${w} ms</b> on the CPU — ` +
+        `<b>${x.toFixed(1)}× faster</b>.<br>` +
+        (R.agree ? "Both backends picked the same class, so the answer is unchanged."
+                 : "<b>They disagreed on the top class</b> — the GPU path would need checking before use.");
+    }
+    document.getElementById("verdict").innerHTML = verdict;
+    log("\n" + verdict.replace(/<[^>]+>/g,""));
+    log("\n--- copy everything below ---\n" + JSON.stringify(R));
+  }catch(e){ log("FAILED: "+(e&&e.message||e)); }
+  document.getElementById("go").disabled = false;
+};
+</script>
+</body>
+</html>
