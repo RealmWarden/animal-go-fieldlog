@@ -76,13 +76,19 @@
          the fallback list, so the payoff for a scan was off-screen. -->
     <div id="result"></div>
 
-    <label class="fld">
+    <div class="fld">
       <span class="lbl">Locality</span>
-      <div class="row">
-        <input type="text" id="place" placeholder="e.g. Griffith Park, CA" value="">
-        <button class="btn tiny ghost" id="geo" type="button" style="border:1px solid var(--line-2)">GPS</button>
+      <div class="placechip" id="placechip" data-state="looking">
+        <span class="pin" aria-hidden="true"></span>
+        <span class="placename" id="placename">Finding your location…</span>
+        <span class="placeacc" id="placeacc"></span>
+        <button class="linkish tight" id="placeedit" type="button">Change</button>
       </div>
-    </label>
+      <div class="row" id="placemanual" hidden>
+        <input type="text" id="place" placeholder="e.g. Griffith Park, CA" value=""
+               aria-label="Locality">
+      </div>
+    </div>
     <div class="fld">
       <span class="lbl">Ownership status</span>
       <div class="seg" role="group">
@@ -167,6 +173,7 @@
     </label>
     <button class="btn tiny ghost" id="reset" style="border:1px solid var(--line-2)">Clear all</button>
   </div>
+  <p class="note" id="scanstats" style="margin-top:8px"></p>
   <p class="note" style="margin-top:8px">Species photographs come from Wikipedia and are
   used under their respective licences; each picture credits its article.</p>
   <p class="note" style="margin-top:8px">iOS can clear a web app's storage after weeks
@@ -190,6 +197,7 @@
 
 <!-- rollup.js and scan.js first: app.js kicks off its boot sequence the moment it
      parses, and that sequence calls into the scanner. -->
+<script src="place.js"></script>
 <script src="rollup.js"></script>
 <script src="engine.js"></script>
 <script src="scan.js"></script>

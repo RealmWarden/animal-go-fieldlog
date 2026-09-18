@@ -140,7 +140,7 @@ function promote(rec, tpl){
    is wrapped, because storage throws in private browsing.
    ============================================================ */
 const LS="animalgo.v1";
-let store={records:[],km:0};
+let store={records:[],km:0,scans:[]};
 
 function lsLoad(){
   try{ const r=localStorage.getItem(LS); if(r) store=JSON.parse(r); }catch(e){}
@@ -161,7 +161,7 @@ async function importJSON(file){
   try{
     const d=JSON.parse(await file.text());
     if(!Array.isArray(d.records)) throw new Error("not a field log export");
-    store={records:d.records, km:d.km||0};
+    store={records:d.records, km:d.km||0, scans:Array.isArray(d.scans)?d.scans:[]};
     await persist(); renderAll(); toast(`Imported ${d.records.length} records.`);
   }catch(e){ toast("That file isn't a field log export."); }
 }
@@ -358,6 +358,7 @@ function addHints(){
     el.insertAdjacentElement("afterend",p);
   };
   put("#viewseg","Only used by the fallback list. A worse view means a vaguer identification.");
+  put("#placechip","Filled in from your phone's location. Tap Change to correct it.");
   put(".seg[role=group]:not(#viewseg)","Pets and zoo animals are collected but don't count toward the dex.");
 }
 
@@ -373,6 +374,65 @@ function fillPicker(){
     const o=document.createElement("option"); o.value=c;
     o.textContent=c[0].toUpperCase()+c.slice(1)+"s"; cl.appendChild(o);
   });
+}
+
+/* --- locality ---
+   One place the rest of the app asks "where am I", so the camera path and the
+   fallback list cannot disagree. A manual entry always wins: a GPS fix under
+   tree cover is a guess, and the person standing there is not. */
+function placeNow(){
+  const manual = $("#placemanual").hidden ? "" : $("#place").value.trim();
+  const f = window.AGP ? AGP.current() : null;
+  const auto = f ? (f.name || `${f.lat.toFixed(4)}, ${f.lon.toFixed(4)}`) : "";
+  return {place: manual || auto,
+          lat: f ? f.lat : null, lon: f ? f.lon : null,
+          acc: f ? Math.round(f.acc) : null,
+          named: !!(f && f.name)};
+}
+
+function paintPlace(){
+  const chip = $("#placechip"), nameEl = $("#placename"), accEl = $("#placeacc");
+  if (!chip) return;
+  const f = window.AGP ? AGP.current() : null;
+  if (window.AGP && AGP.denied()){
+    chip.dataset.state = "off";
+    nameEl.textContent = "Location off — tap Change to type a place";
+    accEl.textContent = "";
+    if ($("#placemanual").hidden) toggleManualPlace(true);
+    return;
+  }
+  if (!f){
+    chip.dataset.state = "looking";
+    nameEl.textContent = "Finding your location…";
+    accEl.textContent = "";
+    return;
+  }
+  chip.dataset.state = "fixed";
+  // undefined means the name lookup is still out; null means this spot has no
+  // name, which is a real answer and gets the coordinates rather than a spinner.
+  nameEl.textContent = f.name === undefined ? "Naming this place…"
+                     : (f.name || `${f.lat.toFixed(4)}, ${f.lon.toFixed(4)}`);
+  accEl.textContent = f.acc ? `±${Math.round(f.acc)} m` : "";
+}
+
+function toggleManualPlace(on){
+  const m = $("#placemanual");
+  m.hidden = !on;
+  $("#placeedit").textContent = on ? "Use my location" : "Change";
+  if (on) $("#place").focus();
+}
+
+// A record can be made before the name lookup comes back. Rather than freeze
+// the button or lose the place, the record keeps its coordinates and the name
+// is patched in when it arrives.
+function backfillPlaceName(rec){
+  if (!window.AGP || rec.lat == null || rec.lon == null) return;
+  if (rec.place && !/^-?\d+\.\d+, /.test(rec.place)) return;    // already named
+  AGP.nameFor(rec.lat, rec.lon).then(n => {
+    if (!n) return;
+    rec.place = n;
+    persist(); renderAll();
+  }).catch(()=>{});
 }
 
 /* --- record --- */
@@ -457,7 +517,7 @@ async function observeRecord(uid){
 
 async function doRecord(){
   const sn=$("#species").value;
-  const place=$("#place").value.trim();
+  const loc=placeNow();
   const scan=simulateScan(sn, viewQuality);
   const out=$("#result"); out.innerHTML="";
 
@@ -473,9 +533,11 @@ async function doRecord(){
 
   const before=new Set(store.records.filter(r=>r.dex).map(r=>r.sn));
   const prevMax=Math.max(0,...store.records.filter(r=>r.sn===scan.tpl.n).map(r=>r.mass));
-  const rec=makeCapture(scan.tpl,{status,place,lat:lastCoords?.[0]??null,lon:lastCoords?.[1]??null,
+  const rec=makeCapture(scan.tpl,{status,place:loc.place,lat:loc.lat,lon:loc.lon,
     conf:scan.conf, cands:scan.cands, trueSp:sn});
+  rec.acc=loc.acc;
   store.records.push(rec);
+  backfillPlaceName(rec);
   await persist();
   out.appendChild(renderSpecimen(rec,{
     isNewDex: rec.dex && !before.has(rec.sn),
@@ -559,7 +621,27 @@ function renderDex(){
   $("#obsn").textContent = store.records.length?`${store.records.length} records`:"";
 }
 
-function renderAll(){ renderList(); renderDex(); $("#walked").textContent=store.km.toFixed(1)+" km"; }
+/* What the scan log says so far, in one line. The point is not the number —
+   it is that "identification usually stalls at genus" stops being a hunch. */
+function renderScanStats(){
+  const el=$("#scanstats"); if(!el) return;
+  const xs=Array.isArray(store.scans)?store.scans:[];
+  if(xs.length<3){ el.textContent=""; return; }
+  const n=xs.length;
+  const pct=k=>Math.round(100*xs.filter(x=>x.o===k).length/n);
+  const held=xs.filter(x=>x.o==="record").map(x=>x.ms).sort((a,b)=>a-b);
+  const med=held.length?Math.round(held[Math.floor(held.length/2)]/100)/10:null;
+  const stalls={};
+  xs.filter(x=>x.o!=="record"&&x.r).forEach(x=>{stalls[x.r]=(stalls[x.r]||0)+1});
+  const worst=Object.entries(stalls).sort((a,b)=>b[1]-a[1])[0];
+  el.textContent=`${n} scans · ${pct("record")}% reached a species`+
+    (med!==null?`, median ${med}s of holding`:"")+
+    ` · ${pct("abandon")+pct("lock-no-record")}% given up on`+
+    (worst?` · most common stall: ${worst[0]} (${worst[1]})`:"");
+}
+
+function renderAll(){ renderList(); renderDex(); renderScanStats();
+  $("#walked").textContent=store.km.toFixed(1)+" km"; }
 
 /* --- events --- */
 function wire(){
@@ -596,14 +678,7 @@ function wire(){
     await persist(); renderAll();
   }));
 
-  $("#geo").addEventListener("click",()=>{
-    if(!navigator.geolocation){ $("#place").placeholder="Location unavailable"; return; }
-    navigator.geolocation.getCurrentPosition(
-      p=>{ lastCoords=[p.coords.latitude,p.coords.longitude];
-           $("#place").value=`${p.coords.latitude.toFixed(4)}, ${p.coords.longitude.toFixed(4)}`; },
-      ()=>{ $("#place").placeholder="Location permission denied"; },
-      {timeout:8000});
-  });
+  $("#placeedit").addEventListener("click",()=>toggleManualPlace($("#placemanual").hidden));
 
   $("#export").addEventListener("click",exportJSON);
   $("#importfile").addEventListener("change",e=>{
@@ -611,7 +686,7 @@ function wire(){
     e.target.value="";
   });
   $("#reset").addEventListener("click",async()=>{
-    store={records:[],km:0}; await persist(); $("#result").innerHTML=""; renderAll();
+    store={records:[],km:0,scans:[]}; await persist(); $("#result").innerHTML=""; renderAll();
   });
 }
 
@@ -640,6 +715,9 @@ async function loadData(){
   await initStore();
   renderAll();
   maybeShowIntro();
+  if (window.AGP){ AGP.onChange(paintPlace); AGP.start(); }
+  paintPlace();
+
   // The scanner owns the camera, the worker and the Record button. It is started
   // after the UI is up so a camera prompt never blocks the app from rendering.
   try{ await initScanner(); }

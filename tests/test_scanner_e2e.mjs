@@ -93,7 +93,16 @@ async function session(script, {photos=true}={}){
   ]});
   const ctx = await browser.newContext({
     viewport:{width:390,height:844}, permissions:["camera","geolocation"],
+    geolocation:{latitude:34.1365, longitude:-118.2942, accuracy:12},   // Griffith Park
   });
+  // Neither geocoder is reachable from this sandbox; answer them so the naming
+  // path is exercised rather than skipped.
+  await ctx.route("https://nominatim.openstreetmap.org/**", r=>r.fulfill({
+    status:200, contentType:"application/json", body: JSON.stringify({
+      address:{leisure:"Griffith Park", city:"Los Angeles", state:"California"}})}));
+  await ctx.route("https://api.bigdatacloud.net/**", r=>r.fulfill({
+    status:200, contentType:"application/json",
+    body: JSON.stringify({locality:"Los Feliz", principalSubdivision:"California"})}));
   // Wikipedia is not reachable from here; answer the photo lookups with a
   // plausible payload so the image path is still exercised.
   await ctx.route("**/api/rest_v1/page/summary/**", route => {
@@ -309,6 +318,118 @@ console.log("\n4b. A leading candidate below the bar is shown, dimmed, not recor
   checkT("it says it is below the threshold", /below the threshold/.test(ui.meta));
   checkT("it tells you to keep holding", /keep holding/i.test(ui.msg));
   checkT("but nothing can be recorded", ui.dis);
+  check("no page errors", errors, []);
+  await browser.close();
+}
+
+console.log("\n4c. Locality fills itself in, and the record carries it");
+{
+  const {browser, page, errors} = await session([enc({"Bombus vosnesenskii":0.88})]);
+  await page.waitForFunction(()=>document.getElementById("placechip").dataset.state==="fixed",
+                             null, {timeout:15000});
+  await page.waitForFunction(()=>/Griffith/.test(document.getElementById("placename").textContent),
+                             null, {timeout:15000});
+  const chip = await page.evaluate(()=>({
+    name: document.getElementById("placename").textContent,
+    acc: document.getElementById("placeacc").textContent,
+    manualHidden: document.getElementById("placemanual").hidden,
+  }));
+  check("it names the park, not the city", chip.name, "Griffith Park, California");
+  checkT("and shows the fix quality", /±\d+ m/.test(chip.acc));
+  checkT("with no text box to fill", chip.manualHidden);
+
+  await page.waitForFunction(()=>!document.getElementById("snap").disabled, null, {timeout:30000});
+  await page.click("#snap");
+  await page.waitForSelector("#result .specimen", {timeout:10000});
+  const rec = await page.evaluate(()=>{
+    const r = store.records[store.records.length-1];
+    return {place:r.place, lat:Math.round(r.lat*100)/100, lon:Math.round(r.lon*100)/100, acc:r.acc};
+  });
+  check("the record gets the place name", rec.place, "Griffith Park, California");
+  check("and the raw coordinates, for re-resolving later", [rec.lat, rec.lon], [34.14, -118.29]);
+  checkT("and the accuracy it was recorded at", rec.acc > 0);
+
+  // one lookup per place, not per animal
+  const calls = await page.evaluate(()=>Object.keys(AGP._cache()).length);
+  check("the place name is cached once", calls, 1);
+  check("no page errors", errors, []);
+  await browser.close();
+}
+
+console.log("\n4d. Location denied: the text box comes back by itself");
+{
+  const browser = await chromium.launch({args:["--use-fake-device-for-media-stream",
+                                               "--use-fake-ui-for-media-stream","--no-sandbox"]});
+  const ctx = await browser.newContext({viewport:{width:390,height:844}, permissions:["camera"]});
+  await ctx.route("https://fonts.googleapis.com/**", r=>r.fulfill({status:200,contentType:"text/css",body:""}));
+  await ctx.route("https://fonts.gstatic.com/**", r=>r.abort());
+  await ctx.route("**/api/rest_v1/page/summary/**", r=>r.fulfill({status:200,
+    contentType:"application/json", body:JSON.stringify({title:"x",type:"standard",
+    thumbnail:{source:base+"/icons/icon-192.png"},content_urls:{desktop:{page:"#"}}})}));
+  await ctx.route("**/engine.js", r=>r.fulfill({status:200, contentType:"text/javascript",
+    body: stubEngine([enc({"Bombus vosnesenskii":0.88})])}));
+  await ctx.addInitScript(()=>{
+    try{ Object.defineProperty(navigator,"serviceWorker",{get:()=>undefined}); }catch(e){}
+    navigator.geolocation.watchPosition = (ok, err) => { err({code:1, message:"denied"}); return 1; };
+  });
+  const page = await ctx.newPage();
+  const errors=[]; page.on("pageerror",e=>errors.push(String(e.message)));
+  await page.goto(base+"/index.html");
+  await page.waitForSelector("#app:not([hidden])", {timeout:20000});
+  await page.click("#introSkip").catch(()=>{});
+  await page.waitForFunction(()=>document.getElementById("placechip").dataset.state==="off",
+                             null, {timeout:15000});
+  const ui = await page.evaluate(()=>({
+    name: document.getElementById("placename").textContent,
+    manualShown: !document.getElementById("placemanual").hidden,
+  }));
+  checkT("it says location is off", /Location off/.test(ui.name));
+  checkT("and reveals the text box without being asked", ui.manualShown);
+
+  await page.fill("#place", "Back yard");
+  await page.waitForFunction(()=>!document.getElementById("snap").disabled, null, {timeout:30000});
+  await page.click("#snap");
+  await page.waitForSelector("#result .specimen", {timeout:10000});
+  const rec = await page.evaluate(()=>store.records[store.records.length-1]);
+  check("a typed place still reaches the record", rec.place, "Back yard");
+  check("with no coordinates to pretend otherwise", rec.lat, null);
+  check("no page errors", errors, []);
+  await browser.close();
+}
+
+console.log("\n4e. Every attempt is logged, recorded or not");
+{
+  const amb = enc({"Bombus vosnesenskii":0.26,"Bombus impatiens":0.24,"Bombus griseocollis":0.22});
+  const {browser, page, errors} = await session([enc({"Bombus vosnesenskii":0.88})]);
+  await page.waitForFunction(()=>!document.getElementById("snap").disabled, null, {timeout:30000});
+  await page.click("#snap");
+  await page.waitForSelector("#result .specimen", {timeout:10000});
+  const logged = await page.evaluate(()=>store.scans[store.scans.length-1]);
+  check("the outcome is a record", logged.o, "record");
+  check("at species rank", logged.r, "species");
+  check("naming what it was", logged.n, "Bombus vosnesenskii");
+  checkT("with how long it was held", logged.ms > 0);
+  checkT("how many frames that took", logged.f >= 3);
+  checkT("the median inference time", logged.im > 0);
+  checkT("and where, to 3 decimals", Math.abs(logged.la - 34.136) < 0.002);
+
+  // now abandon one: tap the viewfinder mid-scan
+  await page.waitForFunction(()=>window.__scan.frames >= 2, null, {timeout:30000});
+  const before = await page.evaluate(()=>store.scans.length);
+  await page.click("#camwrap");
+  await page.waitForFunction(n=>store.scans.length > n, before, {timeout:10000});
+  const ab = await page.evaluate(()=>store.scans[store.scans.length-1]);
+  checkT("an abandoned attempt is logged too", ["abandon","lock-no-record"].includes(ab.o));
+  checkT("with the rank it had got to", ab.r === null || typeof ab.r === "string");
+
+  // one more, so there are enough attempts for the summary to be worth showing
+  await page.waitForFunction(()=>window.__scan.frames >= 2, null, {timeout:30000});
+  const n2 = await page.evaluate(()=>store.scans.length);
+  await page.click("#camwrap");
+  await page.waitForFunction(n=>store.scans.length > n, n2, {timeout:10000});
+
+  const line = await page.evaluate(()=>document.getElementById("scanstats").textContent);
+  checkT("and the app can summarise them", /scans · \d+% reached a species/.test(line));
   check("no page errors", errors, []);
   await browser.close();
 }

@@ -22,10 +22,10 @@
                          the scanner loads it.
 
    Bump CACHE on every deploy; the old cache is deleted on activate. */
-const CACHE = "animalgo-v10";
+const CACHE = "animalgo-v11";
 
 const SHELL = [
-  "./", "./index.html", "./app.js", "./rollup.js", "./engine.js", "./scan.js",
+  "./", "./index.html", "./app.js", "./place.js", "./rollup.js", "./engine.js", "./scan.js",
   "./worker.js", "./styles.css", "./manifest.webmanifest",
   "./data/stat_grid.json", "./data/taxonomy.json", "./data/species.json",
   "./icons/icon-192.png", "./icons/icon-512.png", "./icons/icon-180.png",

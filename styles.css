@@ -380,3 +380,25 @@ h3{font-family:var(--fs-ui); font-size:11px; letter-spacing:.1em; text-transform
 .idcard[data-state="maybe"] .idsci{font-style:italic; opacity:.8}
 .idcard[data-state="maybe"] .idshot{opacity:.62}
 .idcard[data-state="maybe"] .idbar i{background:rgba(255,255,255,.45)}
+
+/* The locality chip. Reads as a fact the phone already knew, not a field you
+   owe an answer to — but "Change" is always there, because a GPS fix under
+   tree cover is a guess and the person standing there is not. */
+.placechip{
+  display:flex; align-items:center; gap:8px;
+  padding:9px 11px; border:1px solid var(--line); border-radius:var(--radius);
+  background:var(--surface); font-family:var(--fs-ui); font-size:13px;
+}
+.placechip .pin{
+  flex:0 0 auto; width:9px; height:9px; border-radius:50%;
+  background:var(--accent); box-shadow:0 0 0 3px var(--accent-soft);
+}
+.placechip[data-state="looking"] .pin{animation:pulse 1.4s ease-in-out infinite}
+.placechip[data-state="off"] .pin{background:var(--ink-3); box-shadow:0 0 0 3px var(--surface-2)}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+.placename{flex:1 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis;
+  white-space:nowrap; font-weight:500}
+.placechip[data-state="looking"] .placename,
+.placechip[data-state="off"] .placename{color:var(--ink-3); font-weight:400}
+.placeacc{flex:0 0 auto; font-family:var(--fs-num); font-size:10.5px; color:var(--ink-3)}
+.linkish.tight{margin:0; padding:0; flex:0 0 auto; font-size:11.5px}

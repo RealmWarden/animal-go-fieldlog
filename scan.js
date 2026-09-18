@@ -40,6 +40,14 @@ const LOCK_FRAMES = 3;
    the encounter end in nothing. */
 const STUCK_FRAMES = 8;
 
+/* Stop looking after this long without an identification. Without it the loop
+   runs on whatever the phone is pointed at after you have given up and lowered
+   it — burning battery, and quietly folding twenty frames of grass into the
+   next animal's evidence. Stopping also ends the attempt cleanly, which is what
+   makes "held 25 s, got as far as the genus, gave up" a data point rather than
+   something that never happened. */
+const GIVE_UP_MS = 25000;
+
 const S = {
   worker: null, stream: null, video: null, canvas: null, ctx: null,
   running: false, pumping: false,
@@ -47,7 +55,7 @@ const S = {
   frames: 0, lastMs: 0,
   best: null,                // {name, rank, p, tpl}
   lockCount: 0, coarseCount: 0, locked: null,
-  ladder: [], status: "idle", fail: null,
+  ladder: [], status: "idle", fail: null, gaveUp: false,
 };
 
 /* --- camera --------------------------------------------------------------- */
@@ -136,6 +144,11 @@ async function pump(){
       if (!S.running) break;
       onProbs(r.probs, r.ms);
       if (S.locked){ S.running = false; paint(); break; }
+      if (sess && Date.now() - sess.t0 > GIVE_UP_MS){
+        S.running = false; S.gaveUp = true;
+        logScan("abandon", S.best); persist();
+        paint(); break;
+      }
       await sleep(140);
     }
   } finally { S.pumping = false; }
@@ -143,6 +156,7 @@ async function pump(){
 
 function resume(){
   if (S.running || !S.stream || S.fail || !AGE.ready) return;
+  S.gaveUp = false;
   S.running = true;
   pump();
 }
@@ -189,6 +203,7 @@ function onProbs(probs, ms){
   if (mid) S.ladder.push({t: r.ge ? "genus" : "family", name:mid.name, p:mid.p});
   if (r.sp) S.ladder.push({t:"species", name:r.sp.name, p:r.sp.p});
   S.roll = r;
+  sessNote(r.pick, ms);
 
   paint();
 }
@@ -222,6 +237,14 @@ function paint(){
   if (r && r.notAnimal && (!b || r.notAnimal.p > 0.6)){
     msg.textContent = `That looks like a ${AGR.niceName(r.notAnimal.name)}, not an animal.`;
     card.innerHTML = ""; btn.disabled = true; btn.textContent = "Record";
+    el("coarse").hidden = true;
+    return;
+  }
+
+  if (S.gaveUp && !b){
+    msg.textContent = "Stopped looking — tap the view to scan again.";
+    card.innerHTML = ""; card.removeAttribute("data-state");
+    btn.disabled = true; btn.textContent = "Record";
     el("coarse").hidden = true;
     return;
   }
@@ -285,7 +308,8 @@ function paint(){
     btn.disabled = true; btn.textContent = "Record";
     el("coarse").hidden = true;
   } else {
-    msg.textContent = "Narrowing it down — hold the animal in frame.";
+    msg.textContent = S.gaveUp ? "Stopped looking — tap the view to scan again."
+                               : "Narrowing it down — hold the animal in frame.";
     btn.disabled = true; btn.textContent = "Record";
     // Stuck at genus is usually the honest answer, not impatience: the model
     // cannot split some genera at all. Offering the coarse record beats ending
@@ -296,6 +320,60 @@ function paint(){
   }
 }
 
+/* --- the scan log ---------------------------------------------------------
+   Every attempt is written down, not just the ones that became records. The
+   open question in design doc s3.4 — whether tapping one of the candidate
+   photographs should count as identifying it — cannot be answered by opinion,
+   only by how often real scans actually stall short of a species and on what.
+   Nothing here leaves the phone; it rides along in the export.             */
+const SCAN_CAP = 500;
+const RANK_ORDER = {family:1, genus:2, species:3};
+let sess = null;
+
+function sessNote(pick, ms){
+  if (!sess) sess = {t0: Date.now(), f: 0, inf: [], rank: null, n: null, p: 0};
+  sess.f++;
+  sess.inf.push(ms);
+  if (pick){
+    const deeper = RANK_ORDER[pick.rank] > RANK_ORDER[sess.rank || ""] ;
+    const samerBetter = pick.rank === sess.rank && pick.p > sess.p;
+    if (!sess.rank || deeper || samerBetter){
+      sess.rank = pick.rank; sess.n = pick.name; sess.p = pick.p;
+    }
+  }
+}
+
+function logScan(outcome, pick){
+  if (!sess) return;
+  const inf = sess.inf.slice().sort((a,b)=>a-b);
+  const f = window.AGP ? AGP.current() : null;
+  const e = {
+    t: new Date(sess.t0).toISOString(),
+    ms: Date.now() - sess.t0,          // how long you actually held it
+    f: sess.f,
+    r: (pick && pick.rank) || sess.rank || null,
+    n: (pick && pick.name) || sess.n || null,
+    p: Math.round(((pick && pick.p) || sess.p || 0) * 100) / 100,
+    o: outcome,
+    im: inf.length ? inf[Math.floor(inf.length/2)] : null,
+    la: f ? Math.round(f.lat*1000)/1000 : null,
+    lo: f ? Math.round(f.lon*1000)/1000 : null,
+  };
+  if (!Array.isArray(store.scans)) store.scans = [];
+  store.scans.push(e);
+  if (store.scans.length > SCAN_CAP) store.scans.splice(0, store.scans.length - SCAN_CAP);
+  sess = null;
+  if (typeof renderScanStats === "function") renderScanStats();
+}
+
+// A scan that ends without a record is the interesting case, so it is logged
+// too — but only once it was a real attempt rather than the camera swinging
+// past something on the way to the thing you meant.
+function abandonScan(){
+  if (sess && sess.f >= 2) { logScan(S.locked ? "lock-no-record" : "abandon", S.best); persist(); }
+  else sess = null;
+}
+
 /* --- recording ------------------------------------------------------------ */
 async function recordFrom(pick){
   const tpl = TX[pick.name];
@@ -303,16 +381,19 @@ async function recordFrom(pick){
   const before = new Set(store.records.filter(r=>r.dex).map(r=>r.sn));
   const prevMax = Math.max(0, ...store.records.filter(r=>r.sn===tpl.n).map(r=>r.mass));
 
+  const loc = placeNow();
   const rec = makeCapture(tpl, {
-    status, place: el("place").value.trim(),
-    lat: lastCoords?.[0] ?? null, lon: lastCoords?.[1] ?? null,
+    status, place: loc.place, lat: loc.lat, lon: loc.lon,
     conf: Math.round(Math.min(0.99, pick.p)*100)/100,
     cands: tpl.r === "species" ? [] : (tpl.mem||[]).slice(0,6),
     trueSp: tpl.r === "species" ? tpl.n : "",
   });
   rec.byCamera = true;
+  rec.acc = loc.acc;
   store.records.push(rec);
+  logScan(tpl.r === "species" ? "record" : "coarse", pick);
   await persist();
+  backfillPlaceName(rec);
 
   const out = el("result"); out.innerHTML = "";
   out.appendChild(renderSpecimen(rec, {
@@ -326,7 +407,7 @@ async function recordFrom(pick){
   // accumulated evidence, or one bee becomes six records while you lower the
   // phone. Clearing the accumulator restarts the observation.
   S.acc = null; S.frames = 0; S.lockCount = 0; S.coarseCount = 0;
-  S.best = null; S.locked = null; S.ladder = []; S.roll = null;
+  S.best = null; S.locked = null; S.ladder = []; S.roll = null; S.gaveUp = false;
   paint();
   out.scrollIntoView({behavior:"smooth", block:"nearest"});
   resume();
@@ -363,11 +444,19 @@ async function initScanner(){
   el("coarsebtn").addEventListener("click", ()=>{ if (S.best) recordFrom(S.best); });
   // Tapping the viewfinder restarts a stopped scan — the way out of a lock on
   // the wrong animal, or on one that has since flown off.
+  // Tap to start over: on a paused scan it resumes, and mid-scan it throws away
+  // the evidence so far. Both are the same intent — "look again, from scratch".
   el("camwrap").addEventListener("click", ()=>{
-    if (S.running || S.fail) return;
+    if (S.fail) return;
+    const wasRunning = S.running;
+    S.running = false;
+    abandonScan();
     S.acc = null; S.frames = 0; S.lockCount = 0; S.coarseCount = 0;
-    S.best = null; S.locked = null; S.ladder = []; S.roll = null;
-    paint(); resume();
+    S.best = null; S.locked = null; S.ladder = []; S.roll = null; S.gaveUp = false;
+    paint();
+    // Let the in-flight inference finish before starting the loop again, or two
+    // loops run at once and the readout jitters between them.
+    setTimeout(resume, wasRunning ? 200 : 0);
   });
   el("togglepicker").addEventListener("click", ()=>{
     const p = el("pickerfall");
@@ -376,12 +465,18 @@ async function initScanner(){
                                               : "Hide the species list";
   });
 
+  global_pagehide();
   document.addEventListener("visibilitychange", ()=>{
     // Holding a camera stream open in the background drains the battery and iOS
     // may kill the tab for it.
-    if (document.hidden) S.running = false;
+    if (document.hidden){ S.running = false; abandonScan(); }
     else resume();
   });
+}
+
+function global_pagehide(){
+  // pagehide rather than beforeunload: iOS does not reliably fire the latter.
+  window.addEventListener("pagehide", abandonScan);
 }
 
 window.__scan = S;   // for the test harness
