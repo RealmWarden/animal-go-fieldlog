@@ -547,6 +547,54 @@ async function doRecord(){
   renderAll();
 }
 
+/* --- walking ---
+   Distance is measured by walk.js and is a lower bound on what was actually
+   walked (see the header there for why that is the only honest option on iOS).
+   Only the active squad is paid, per design doc s8. */
+function creditSquad(km){
+  const gained = Math.round(km * XP_PER_KM);
+  if (gained <= 0) return;
+  store.records.filter(r => r.squad).forEach(r => r.xp += gained);
+}
+
+let walkSaveTimer = null;
+function flushWalk(){
+  // Distance earned in the last few seconds would otherwise die with the page.
+  if (walkSaveTimer === null) return;
+  clearTimeout(walkSaveTimer); walkSaveTimer = null;
+  persist();
+}
+window.addEventListener("pagehide", flushWalk);
+document.addEventListener("visibilitychange", ()=>{ if (document.hidden) flushWalk(); });
+
+function onDistance(km){
+  store.km = Math.round((store.km + km) * 1000) / 1000;
+  creditSquad(km);
+  renderWalk();
+  $("#walked").textContent = store.km.toFixed(1) + " km";
+  // Distance arrives every few metres; writing the whole store each time would
+  // be a localStorage write every couple of seconds for an entire walk.
+  clearTimeout(walkSaveTimer);
+  walkSaveTimer = setTimeout(() => { walkSaveTimer = null; persist(); renderList(); }, 15000);
+}
+
+function renderWalk(){
+  const el = $("#todaywalk"); if (!el || !window.AGW) return;
+  const t = AGW.today();
+  const km = t.m / 1000;
+  const squad = store.records.filter(r => r.squad).length;
+  if (km < 0.02){
+    el.textContent = squad
+      ? "No distance yet today. Keep the app open while you walk and it will track; it also picks up the straight line between the places you open it."
+      : "No distance yet today, and no active squad — star up to six specimens below so the walking counts for something.";
+    return;
+  }
+  const how = t.external > t.tracked ? "reported by Health" : "measured while the app was open";
+  el.textContent = `${km.toFixed(2)} km today (${how})` +
+    (squad ? ` · ${Math.round(km*XP_PER_KM).toLocaleString()} XP to each of ${squad} in the squad`
+           : " · no active squad, so nothing is earning it");
+}
+
 /* --- collection --- */
 function renderList(){
   const q=$("#q").value.toLowerCase().trim();
@@ -640,7 +688,7 @@ function renderScanStats(){
     (worst?` · most common stall: ${worst[0]} (${worst[1]})`:"");
 }
 
-function renderAll(){ renderList(); renderDex(); renderScanStats();
+function renderAll(){ renderList(); renderDex(); renderScanStats(); renderWalk();
   $("#walked").textContent=store.km.toFixed(1)+" km"; }
 
 /* --- events --- */
@@ -671,10 +719,12 @@ function wire(){
   });
 
   $$("[data-walk]").forEach(b=>b.addEventListener("click",async()=>{
+    // Test control only — real distance comes from walk.js. Kept because the
+    // Apex tier is 150 km of walking and nobody should have to do that to find
+    // out whether the mastery curve feels right.
     const km=parseFloat(b.dataset.walk);
-    store.km+=km;
-    const gained=Math.round(km*XP_PER_KM);
-    store.records.filter(r=>r.squad).forEach(r=>r.xp+=gained);
+    store.km=Math.round((store.km+km)*1000)/1000;
+    creditSquad(km);
     await persist(); renderAll();
   }));
 
@@ -713,9 +763,24 @@ async function loadData(){
   document.getElementById("app").hidden = false;
   fillPicker(); addHints(); wire(); wireIntro();
   await initStore();
+  if (window.AGW){
+    // A getter, not the object: initStore() has just replaced `store` with the
+    // saved one, and importing an export will replace it again.
+    AGW.attach(() => store);
+    AGW.onGain(onDistance);
+    const topUp = AGW.ingestFromUrl();      // ?km= from a step tracker
+    if (topUp) toast(`Added ${(topUp/1000).toFixed(2)} km from your step tracker.`);
+  }
   renderAll();
   maybeShowIntro();
-  if (window.AGP){ AGP.onChange(paintPlace); AGP.start(); }
+  if (window.AGP){
+    AGP.onChange(()=>{
+      paintPlace();
+      const f = AGP.current();
+      if (f && window.AGW) AGW.fix(f);
+    });
+    AGP.start();
+  }
   paintPlace();
 
   // The scanner owns the camera, the worker and the Record button. It is started

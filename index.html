@@ -144,11 +144,7 @@
       earns experience from distance — the rest of the collection needs nothing from you.
       Nothing forces rotation; bringing a creature up is its own completion axis, so swap
       the squad when you want a particular animal levelled.</p>
-      <div class="row" style="margin-top:10px">
-        <button class="btn tiny" data-walk="1">Walk 1 km</button>
-        <button class="btn tiny" data-walk="5">5 km</button>
-        <button class="btn tiny ghost" style="border:1px solid var(--accent)" data-walk="0.5">0.5 km</button>
-      </div>
+      <p class="note walkline" id="todaywalk"></p>
     </div>
     <div id="list"></div>
   </section>
@@ -172,6 +168,8 @@
       Import<input type="file" id="importfile" accept="application/json" hidden>
     </label>
     <button class="btn tiny ghost" id="reset" style="border:1px solid var(--line-2)">Clear all</button>
+    <button class="btn tiny ghost" data-walk="1" style="border:1px dashed var(--line-2)">+1 km (test)</button>
+    <button class="btn tiny ghost" data-walk="5" style="border:1px dashed var(--line-2)">+5 km (test)</button>
   </div>
   <p class="note" id="scanstats" style="margin-top:8px"></p>
   <p class="note" style="margin-top:8px">Species photographs come from Wikipedia and are
@@ -198,6 +196,7 @@
 <!-- rollup.js and scan.js first: app.js kicks off its boot sequence the moment it
      parses, and that sequence calls into the scanner. -->
 <script src="place.js"></script>
+<script src="walk.js"></script>
 <script src="rollup.js"></script>
 <script src="engine.js"></script>
 <script src="scan.js"></script>

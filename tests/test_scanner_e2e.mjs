@@ -434,6 +434,75 @@ console.log("\n4e. Every attempt is logged, recorded or not");
   await browser.close();
 }
 
+console.log("\n4f. Walking accrues distance and pays the squad");
+{
+  const {browser, page, errors} = await session([enc({"Bombus vosnesenskii":0.88})]);
+  const ctx = page.context();
+  await page.waitForFunction(()=>document.getElementById("placechip").dataset.state==="fixed",
+                             null, {timeout:15000});
+  const before = await page.evaluate(()=>({
+    km: store.km,
+    xp: store.records.filter(r=>r.squad).map(r=>r.xp),
+    squad: store.records.filter(r=>r.squad).length,
+  }));
+  checkT("there is a squad to pay", before.squad > 0);
+
+  // three 12 m steps, 6 s apart: 2 m/s, a brisk walk
+  let lat = 34.1365;
+  for (let i=0;i<3;i++){
+    await page.waitForTimeout(6200);
+    lat += 12/111320;
+    await ctx.setGeolocation({latitude: lat, longitude: -118.2942, accuracy: 8});
+  }
+  await page.waitForFunction(k=>store.km > k + 0.02, before.km, {timeout:20000});
+  const after = await page.evaluate(()=>({
+    km: store.km,
+    xp: store.records.filter(r=>r.squad).map(r=>r.xp),
+    line: document.getElementById("todaywalk").textContent,
+  }));
+  checkT("distance accrued", after.km - before.km > 0.02 && after.km - before.km < 0.06);
+  checkT("every squad member gained XP", after.xp.every((v,i)=>v > before.xp[i]));
+  checkT("and the app says what it measured", /km today \(measured while the app was open\)/.test(after.line));
+  check("no page errors", errors, []);
+  await browser.close();
+}
+
+console.log("\n4g. A step tracker can top the day up through the URL");
+{
+  const browser = await chromium.launch({args:["--use-fake-device-for-media-stream",
+                                               "--use-fake-ui-for-media-stream","--no-sandbox"]});
+  const ctx = await browser.newContext({viewport:{width:390,height:844},
+    permissions:["camera","geolocation"], geolocation:{latitude:34.1365,longitude:-118.2942,accuracy:12}});
+  await ctx.route("https://fonts.googleapis.com/**", r=>r.fulfill({status:200,contentType:"text/css",body:""}));
+  await ctx.route("https://fonts.gstatic.com/**", r=>r.abort());
+  await ctx.route("https://nominatim.openstreetmap.org/**", r=>r.fulfill({status:200,
+    contentType:"application/json", body:JSON.stringify({address:{leisure:"Griffith Park",state:"California"}})}));
+  await ctx.route("**/api/rest_v1/page/summary/**", r=>r.fulfill({status:200,
+    contentType:"application/json", body:JSON.stringify({title:"x",type:"standard",
+    thumbnail:{source:base+"/icons/icon-192.png"},content_urls:{desktop:{page:"#"}}})}));
+  await ctx.route("**/engine.js", r=>r.fulfill({status:200, contentType:"text/javascript",
+    body: stubEngine([enc({"Bombus vosnesenskii":0.88})])}));
+  await ctx.addInitScript(()=>{ try{ Object.defineProperty(navigator,"serviceWorker",{get:()=>undefined}); }catch(e){} });
+  const page = await ctx.newPage();
+  const errors=[]; page.on("pageerror",e=>errors.push(String(e.message)));
+  await page.goto(base+"/index.html?km=3.4");
+  await page.waitForSelector("#app:not([hidden])", {timeout:20000});
+  await page.click("#introSkip").catch(()=>{});
+  const r = await page.evaluate(()=>({km:store.km, url:location.search,
+                                      line:document.getElementById("todaywalk").textContent}));
+  check("the reported distance is credited", Math.round((r.km - 22.0)*10)/10, 3.4);
+  check("and the parameter is cleared so a reload cannot repeat it", r.url, "");
+  checkT("the app credits the source", /reported by Health/.test(r.line));
+
+  // and it is idempotent even if the parameter does come back
+  await page.goto(base+"/index.html?km=3.4");
+  await page.waitForSelector("#app:not([hidden])", {timeout:20000});
+  const again = await page.evaluate(()=>store.km);
+  check("the same figure twice is still one credit", Math.round((again - 22.0)*10)/10, 3.4);
+  check("no page errors", errors, []);
+  await browser.close();
+}
+
 console.log("\n5. The crop the classifier sees is square and undistorted");
 {
   const {browser, page, errors} = await session([enc({"Bombus vosnesenskii":0.85})]);

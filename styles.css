@@ -402,3 +402,4 @@ h3{font-family:var(--fs-ui); font-size:11px; letter-spacing:.1em; text-transform
 .placechip[data-state="off"] .placename{color:var(--ink-3); font-weight:400}
 .placeacc{flex:0 0 auto; font-family:var(--fs-num); font-size:10.5px; color:var(--ink-3)}
 .linkish.tight{margin:0; padding:0; flex:0 0 auto; font-size:11.5px}
+.walkline{margin:10px 0 0; line-height:1.55}
